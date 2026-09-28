@@ -4,32 +4,42 @@ from monai.transforms import Compose, LoadImageD, EnsureTyped, ResizeD, ResizeWi
 
 
 class ResizeWithRatio(MapTransform):
-    def __init__(self, keys, image_size, mode='bilinear'):
-        super().__init__(keys)
+    """
+    Resize image and mask with aspect ratio preservation, using
+    different interpolation modes for image (bilinear) and mask (nearest).
+
+    Suitable for 2D data (e.g., polyp segmentation). For 3D data,
+    use 'trilinear' for image and 'nearest' for mask.
+    """
+        
+    def __init__(self, image_key, mask_key, image_size, image_mode='bilinear', mask_mode='nearest'):
+        super().__init__(keys=[image_key, mask_key])
+        self.image_key = image_key
+        self.mask_key = mask_key
         self.image_size = image_size
-        self.mode=mode
+        self.image_mode = image_mode
+        self.mask_mode = mask_mode
 
     def __call__(self, data):
-        d = copy.deepcopy(data)
-        image = d[self.keys[0]]
+        d = dict(data)
+        image = d[self.image_key]
         h, w = image.shape[1:3]
-        if h != w:
-            if h > w:
-                new_h = self.image_size
-                scale_factor = new_h / h
-                new_w = int(w * scale_factor)
-            else:
-                new_w = self.image_size
-                scale_factor = new_w / w
-                new_h = int(h * scale_factor)
-            new_size = (new_h, new_w) if image.ndim == 3 else (new_h, new_w, image.shape[3])
-        else:
-            new_size = (self.image_size, self.image_size) if image.ndim == 3 else (self.image_size, self.image_size, image.shape[3])
-            
-        resize_transform = ResizeD(keys=self.keys, spatial_size=new_size, mode=self.mode)
-        
-        d = resize_transform(d)
 
+        if h == w:
+            new_h = new_w = self.image_size
+        elif h > w:
+            new_h = self.image_size
+            new_w = int(w * (self.image_size / h))
+        else:
+            new_w = self.image_size
+            new_h = int(h * (self.image_size / w))
+            
+        image_resize = ResizeD(keys=[self.image_key], spatial_size=(new_h, new_w), mode=self.image_mode)
+        mask_resize = ResizeD(keys=[self.mask_key], spatial_size=(new_h, new_w), mode=self.mask_mode)
+
+        d = image_resize(d)
+        d = mask_resize(d)
+        
         return d
 
 def get_mslesseg_transform(args, sam_image_dim = None, get_bbox=False):
