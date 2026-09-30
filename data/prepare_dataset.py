@@ -66,8 +66,8 @@ PROJECT_ROOT = DATA_DIR.parent
 # ---------------------------------------------------------------------------
 
 # Google Drive file IDs (or full URLs).
-TRAIN_GDRIVE_ID = "1YiGHLw4iTvKdvbT6MgwO9zcCv8zJ_Bnb"
-TEST_GDRIVE_ID = "1Y2z7FD5p5y31vkZwQQomXFRB0HutHyao"
+TRAIN_GDRIVE_ID = "1FvlC6rr_LbxyeT530trcJcZ_iQ-ZwlDU"
+TEST_GDRIVE_ID = "1R8RIIOBd9ZA9z0kYTuEZ6tO3ggv4d7Cy"
 
 # Dataset folder names.
 TRAIN_DATASET_NAME = "TrainDataset"
