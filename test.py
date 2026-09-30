@@ -11,7 +11,7 @@ from monai.transforms import AsDiscrete, Activations
 from monai.metrics import DiceMetric, MeanIoU, ConfusionMatrixMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
 import sys
 from utils.saver import Saver
-from dataset.MSLesSeg import get_test_mslesseg_dataset
+from dataset.polyp_dataset import get_test_mslesseg_dataset
 from utils.model_utils import get_model, sam_call, get_standard_model
 from utils.utils import str2bool
 from utils.metrics_utils import stratified_lesion_analysis, compute_lesionwise_metrics
