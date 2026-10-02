@@ -6,7 +6,7 @@ from packaging import version
 def sam_call(batched_input, sam, dense_embeddings, args=None):
     with torch.no_grad():
         if args is not None:
-            if args['task'] in ['mslesseg']:
+            if args['task'] in ['polyp']:
                 input_images = torch.stack([x["image"] for x in batched_input], dim=0)
         else:
             input_images = torch.stack([sam.preprocess(x["image"]) for x in batched_input], dim=0)

@@ -334,67 +334,137 @@ def gen_step(
 # ===========================================================================
 
 def get_input_dict(
-    imgs: torch.Tensor,
-    original_sz: torch.Tensor,
-    img_sz: torch.Tensor,
-    point_coords: Optional[torch.Tensor] = None,
-    point_labels: Optional[torch.Tensor] = None,
-    boxes: Optional[torch.Tensor] = None,
-    mask_inputs: Optional[torch.Tensor] = None,
-) -> List[dict]:
+    imgs,
+    original_sz,
+    img_sz,
+    point_coords=None,
+    point_labels=None,
+    boxes=None,
+    mask_inputs=None,
+    swap_original_size=True,
+):
     """
-    Build per-sample input dicts for SAM.
+    Build per-sample input dicts for SAM (polyp 2D pipeline).
+
+    This is a polyp-focused variant of the original MS function. It keeps
+    the same signature (plus one optional keyword) so it remains a
+    drop-in replacement, while fixing several issues for 2D RGB data.
 
     Parameters
     ----------
     imgs : torch.Tensor
         Batch of images, shape (B, C, H, W).
-    original_sz : torch.Tensor
-        Shape (B, 2), rows are (H_orig, W_orig).
-    img_sz : torch.Tensor
-        Shape (B, 2), rows are (H_curr, W_curr).
-    point_coords, point_labels, boxes, mask_inputs : torch.Tensor, optional
-        All prompts, if provided, MUST be batched (first dim == B).
+        For polyp: (B, 3, 1024, 1024), already ImageNet-normalized.
+    original_sz : torch.Tensor, numpy.ndarray, or list/tuple of pairs
+        Per-sample ORIGINAL sizes, shape (B, 2).
+        For polyp, PIL's `meta['spatial_shape']` provides (W, H).
+        This function will swap it to (H, W) by default
+        (see `swap_original_size`).
+    img_sz : torch.Tensor, numpy.ndarray, or list/tuple of pairs
+        Per-sample CURRENT sizes, shape (B, 2). Usually (1024, 1024).
+    point_coords, point_labels, boxes, mask_inputs : optional, batched
+        Optional prompts. When provided, the first dim MUST equal B.
+        Each one is passed PER-SAMPLE (indexed by i), matching SAM's
+        native API. NOT used by the polyp pipeline (polyp uses dense
+        embeddings only), but kept for API completeness.
+    swap_original_size : bool, default True
+        If True, `original_size` is swapped from (W, H) to (H, W).
+        Default True is correct for polyp because PIL returns (W, H).
+        Set to False if your input already follows (H, W) order.
 
     Returns
     -------
     list of dict
-        One dict per sample with keys 'image', 'original_size',
-        'image_size', and optional prompts.
+        One dict per sample, with keys:
+            'image'         : (C, H, W) tensor
+            'original_size' : (h, w) tuple of ints
+            'image_size'    : (h, w) tuple of ints
+            (+ any provided prompt, per-sample)
     """
     B = imgs.shape[0]
     batched_input = []
 
-    for i in range(B):
+    for i, img in enumerate(imgs):
+        # --- Sizes: robustly handle tensor / numpy / list / tuple ---
+        original_size = _size_to_tuple(original_sz[i])
+        input_size    = _size_to_tuple(img_sz[i])
+
+        # --- Polyp fix: PIL meta gives (W, H); swap to (H, W) ---
+        if swap_original_size:
+            original_size = (original_size[1], original_size[0])
+
         single_input = {
-            "image": imgs[i],
-            "original_size": tuple(
-                int(x) for x in original_sz[i].flatten().tolist()
-            ),
-            "image_size": tuple(
-                int(x) for x in img_sz[i].flatten().tolist()
-            ),
+            "image": img,
+            "original_size": original_size,
+            "image_size": input_size,
         }
 
+        # --- Optional prompts: per-sample, with batch-size validation ---
         if point_coords is not None:
-            assert point_coords.shape[0] == B, "point_coords batch size mismatch"
-            single_input["point_coords"] = point_coords[i].unsqueeze(0)
+            _check_batch_dim(point_coords, B, "point_coords")
+            single_input["point_coords"] = _slice_prompt(point_coords, i, ndim=2)
 
         if point_labels is not None:
-            assert point_labels.shape[0] == B, "point_labels batch size mismatch"
-            single_input["point_labels"] = point_labels[i].unsqueeze(0)
+            _check_batch_dim(point_labels, B, "point_labels")
+            single_input["point_labels"] = _slice_prompt(point_labels, i, ndim=1)
 
         if boxes is not None:
-            assert boxes.shape[0] == B, "boxes batch size mismatch"
-            single_input["boxes"] = boxes[i].unsqueeze(0)
+            _check_batch_dim(boxes, B, "boxes")
+            single_input["boxes"] = _slice_prompt(boxes, i, ndim=2)
 
         if mask_inputs is not None:
-            assert mask_inputs.shape[0] == B, "mask_inputs batch size mismatch"
+            _check_batch_dim(mask_inputs, B, "mask_inputs")
             single_input["mask_inputs"] = mask_inputs[i]
 
         batched_input.append(single_input)
 
     return batched_input
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _size_to_tuple(x):
+    """
+    Convert a size (tensor / numpy array / list / tuple) into a plain
+    tuple of ints, regardless of its original shape.
+
+    Handles shapes: (2,), (1, 2), (2, 1), [h, w], (h, w).
+    """
+    if hasattr(x, "flatten"):                 # torch.Tensor
+        return tuple(int(v) for v in x.flatten().tolist())
+    if hasattr(x, "tolist"):                  # numpy array
+        return tuple(int(v) for v in x.tolist())
+    return tuple(int(v) for v in x)           # python list / tuple
+
+
+def _check_batch_dim(x, B, name):
+    """
+    Assert that x has a first dimension equal to B.
+    Used only for optional prompts, to catch batch mismatches early.
+    """
+    if not hasattr(x, "shape"):
+        raise TypeError(
+            f"Prompt '{name}' must have a `.shape` attribute, "
+            f"got {type(x).__name__}"
+        )
+    if x.shape[0] != B:
+        raise ValueError(
+            f"Prompt '{name}' batch size mismatch: "
+            f"expected {B}, got {x.shape[0]}"
+        )
+
+
+def _slice_prompt(x, i, ndim):
+    """
+    Return the i-th sample of a batched prompt. If the sample already has
+    the right number of dims, prepend a singleton so SAM sees shape (1, N, ...).
+    """
+    s = x[i]
+    if s.dim() == ndim:
+        return s.unsqueeze(0)
+    return s
 
 
 # ===========================================================================

@@ -12,7 +12,7 @@ to its own file location, so it can be run from anywhere.
 Project layout (assumed):
     polyp_sam_less/                  <- project root
     ├── data/
-    │   ├── download_datasets.py     <- this file
+    │   ├── prepare_dataset.py     <- this file
     │   ├── generate_split.py
     │   ├── split.json
     │   ├── TrainDataset/
