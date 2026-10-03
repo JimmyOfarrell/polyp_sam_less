@@ -60,8 +60,7 @@ def  train_single_epoch_monai(ds, model, sam, optimizer, transform, epoch, args,
     optimizer.zero_grad()
     for ix,  sample in enumerate(pbar):      
         
-        if isinstance(sample, list):
-            sample = sample[0]
+        if isinstance(sample, list): sample = sample[0]
         imgs = sample[args['image_key']].squeeze(-1)
         gts = sample[args['mask_key']].squeeze(-1)#.squeeze(1)
         original_sz = torch.tensor(np.array([sample[args['image_key']][i].meta['spatial_shape'][:2] for i in range(len(sample[args['image_key']]))]))

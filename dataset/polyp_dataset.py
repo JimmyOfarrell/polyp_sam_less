@@ -32,8 +32,8 @@ Expected JSON structure:
 import sys
 import json
 from typing import Optional
-from monai.data import CacheDataset
 from dataset.polyp_transforms import get_polyp_transforms
+from monai.data import CacheDataset
 
 
 class PolypDataset(CacheDataset):

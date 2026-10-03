@@ -1,8 +1,9 @@
-import torch.optim as optim
 import torch
 import os
-from utils.saver import Saver
 import sys
+import wandb
+import torch.optim as optim
+from utils.saver import Saver
 from inference import inference_ds_monai
 from train import train_single_epoch, train_single_epoch_monai
 from utils.model_utils import get_model, get_standard_model
@@ -10,7 +11,6 @@ from utils.dataset_utils import get_dataset
 from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything import sam_model_registry
 from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
-import wandb
 from utils.scheduler import WarmupCosineSchedule, WarmupLinearSchedule
 
 def main(args=None, sam_args=None, saver=None):
