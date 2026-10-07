@@ -1,14 +1,15 @@
+import torch
 import numpy as np
 import torch.nn as nn
-import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-from utils.utils import norm_batch, gen_step, get_input_dict
+from torch.amp import autocast
+from utils.model_utils import sam_call
 from monai.losses import DiceLoss, DiceCELoss
 from monai.metrics import DiceMetric, MeanIoU
 from monai.transforms import AsDiscrete, Activations
-from utils.model_utils import sam_call
-from torch.cuda.amp import autocast
+from utils.utils import norm_batch, gen_step, get_input_dict
+
 
 
 def train_single_epoch(ds, model, sam, optimizer, epoch, args):
@@ -36,8 +37,6 @@ def train_single_epoch(ds, model, sam, optimizer, epoch, args):
     return np.mean(loss_list)
 
 def train_single_epoch_monai(ds, model, sam, optimizer, transform, epoch, args, saver, scheduler=None, scaler=None):
-    #post-transformation of labels
-    #discretize_labels = AsDiscrete(threshold = args['theashold_discretize'])
     one_hot = AsDiscrete(to_onehot=2, dim=1)
     post_trans = AsDiscrete(threshold=args['theashold_discretize'])
     sigmoid = Activations(sigmoid=True)
@@ -49,6 +48,7 @@ def train_single_epoch_monai(ds, model, sam, optimizer, transform, epoch, args, 
     dice_list = []
     loss_list = []
     pbar = tqdm(ds)
+
     apply_sigm = True if (getattr(model, "is_segmentor", False) or args['net']=='Unet') and args['use_standard_net'] else False
     if args['criterion'] == 'dice':
         criterion = DiceLoss(include_background=args['include_background'], sigmoid=apply_sigm)
@@ -56,23 +56,23 @@ def train_single_epoch_monai(ds, model, sam, optimizer, transform, epoch, args, 
         criterion = DiceCELoss(include_background=args['include_background'], sigmoid=apply_sigm)
     else:
         raise ValueError('Criterion not recognized')
+
     Idim = int(args['Idim'])
     optimizer.zero_grad()
+
     for ix,  sample in enumerate(pbar):      
-        
         if isinstance(sample, list): sample = sample[0]
         imgs = sample[args['image_key']].squeeze(-1)
-        gts = sample[args['mask_key']].squeeze(-1)#.squeeze(1)
-        original_sz = torch.tensor(np.array([sample[args['image_key']][i].meta['spatial_shape'][:2] for i in range(len(sample[args['image_key']]))]))
-        img_sz =torch.tensor(imgs.shape[2:]).repeat(len(sample[args['image_key']]), 1)
+        gts = sample[args['mask_key']].squeeze(-1)
+
+        B = imgs.shape[0]
+        original_sz = torch.tensor([[1024, 1024]] * B, dtype=torch.int64)
+        img_sz = torch.tensor(imgs.shape[2:]).repeat(B, 1)
         orig_imgs = imgs.to(args['device'])
         gts = gts.to(args['device'])
         
-        #orig_imgs_small = F.interpolate(orig_imgs, (Idim, Idim), mode='bilinear', align_corners=True)
-        if args['num_slices'] == 1:
-            orig_imgs_small = F.interpolate(orig_imgs, size=(Idim, Idim), mode='bilinear', align_corners=False)
-        elif args['num_slices'] > 1:
-            orig_imgs_small = F.interpolate(orig_imgs, size=(orig_imgs.shape[2], Idim, Idim), mode='trilinear', align_corners=False)
+        if args['num_slices'] == 1: orig_imgs_small = F.interpolate(orig_imgs, size=(Idim, Idim), mode='bilinear', align_corners=False)
+        elif args['num_slices'] > 1: orig_imgs_small = F.interpolate(orig_imgs, size=(orig_imgs.shape[2], Idim, Idim), mode='trilinear', align_corners=False)
         
         with autocast(enabled=args['use_cuda_amp']):
             if sam is not None:

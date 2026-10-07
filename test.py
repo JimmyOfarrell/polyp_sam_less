@@ -392,7 +392,7 @@ if __name__ == '__main__':
     parser.add_argument('--cache_rate', type=float, default=.7, help='Cache rate')
 
     parser.add_argument('--save_test_images', type=str2bool, default=True, help='Save images')
-    parser.add_argument('--theashold_discretize', type=float, default=0.01, help='Threshold for discretization')
+    parser.add_argument('--theashold_discretize', type=float, default=0.5, help='Threshold for discretization')
     parser.add_argument('--ckpt_path', type=str, default=None, help='Checkpoint path to continue training')
     parser.add_argument('--pretrained', type=str2bool, default=True, help='Pretrained model')
     parser.add_argument('--save_embeddings', type=str2bool, default=True, help='Save embeddings')
