@@ -1,17 +1,17 @@
 import numpy as np
-from tqdm import tqdm
 import torch.nn as nn
 import torch
+import torch.nn.functional as F
+from tqdm import tqdm
 from utils.utils import norm_batch, gen_step, get_input_dict
 from monai.losses import DiceLoss, DiceCELoss
 from monai.metrics import DiceMetric, MeanIoU
 from monai.transforms import AsDiscrete, Activations
 from utils.model_utils import sam_call
-import torch.nn.functional as F
 from torch.cuda.amp import autocast
 
 
-def train_single_epoch(ds, model, sam, optimizer, transform, epoch, args):
+def train_single_epoch(ds, model, sam, optimizer, epoch, args):
     loss_list = []
     pbar = tqdm(ds)
     criterion = nn.BCELoss()
@@ -35,7 +35,7 @@ def train_single_epoch(ds, model, sam, optimizer, transform, epoch, args):
             ))
     return np.mean(loss_list)
 
-def  train_single_epoch_monai(ds, model, sam, optimizer, transform, epoch, args, saver, scheduler=None, scaler=None):
+def train_single_epoch_monai(ds, model, sam, optimizer, transform, epoch, args, saver, scheduler=None, scaler=None):
     #post-transformation of labels
     #discretize_labels = AsDiscrete(threshold = args['theashold_discretize'])
     one_hot = AsDiscrete(to_onehot=2, dim=1)

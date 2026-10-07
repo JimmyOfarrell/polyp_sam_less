@@ -7,40 +7,41 @@ from utils.saver import Saver
 from inference import inference_ds_monai
 from train import train_single_epoch, train_single_epoch_monai
 from utils.model_utils import get_model, get_standard_model
-from utils.dataset_utils import get_dataset
+from utils.dataset_utils import get_train_val_dataloaders
 from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything import sam_model_registry
 from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
 from utils.scheduler import WarmupCosineSchedule, WarmupLinearSchedule
 
 def main(args=None, sam_args=None, saver=None):
-    if args['device']=='cuda':
-        args['device'] = torch.device("cuda:"+str(args['device_id']))
-    else:
-        args['device'] = torch.device("cpu")
+    requested = str(args['device']).strip()
+    if requested.startswith('cuda'):
+        if torch.cuda.is_available():
+            if ':' in requested: args['device'] = torch.device(requested)
+            else: args['device'] = torch.device("cuda:"+str(args['device_id']))    
+        else:
+            print(f"[WARNING] '{requested}' requested but CUDA not available. Falling back to CPU.")
+            args['device'] = torch.device('cpu')
+    else: args['device'] = torch.device('cpu')
+    print(f"[INFO] Using device: {args['device']}")            
+
     
     if args['use_sam']:
         sam = sam_model_registry[sam_args['model_type']](checkpoint=sam_args['sam_checkpoint'])
         sam.to(device=args['device'])
         img_dim = sam.image_encoder.img_size
-        transform = ResizeLongestSide(img_dim)
-        if args['disable_batchnorm_running_stats']:
-            disable_batchnorm_running_stats(sam)
+        if args['disable_batchnorm_running_stats']: disable_batchnorm_running_stats(sam)
     else:
         sam = None
         img_dim = int(args['Idim'])
-        transform = None
     
-    ds, ds_val = get_dataset(args, transform, img_dim)
-    img_ch = ds.dataset[0][0][args['image_key']].shape[0]
+    train_dataloader, val_dataloader = get_train_val_dataloaders(args, img_dim)
+    img_ch = train_dataloader.dataset[0][args['image_key']].shape[0]
     
-    if not args['use_standard_net']:
-        model = get_model(args, sam, img_ch)
-    else:
-        model = get_standard_model(args, img_ch)
+    if not args['use_standard_net']: model = get_model(args, sam, img_ch)
+    else: model = get_standard_model(args, img_ch)
         
-    if args['disable_batchnorm_running_stats']:
-            disable_batchnorm_running_stats(model)
+    if args['disable_batchnorm_running_stats']: disable_batchnorm_running_stats(model)
     
     if not args['use_sam']:
         if not args['segmentor_finetune_backbone']:
@@ -48,30 +49,25 @@ def main(args=None, sam_args=None, saver=None):
                 param.requires_grad = False
             for param in model.segmentor.parameters():
                 param.requires_grad = True
-            params_to_optimize = model.segmentor.parameters()
+            params_to_optimize = list(model.segmentor.parameters())
         else:
             for param in model.parameters():
                 param.requires_grad = True
-            params_to_optimize = model.parameters()
+            params_to_optimize = list(model.parameters())
     else:
         # If using SAM, optimize all model parameters
-        params_to_optimize = model.parameters()
+        params_to_optimize = list(model.parameters())
 
     if args['optim']=='Adam':
-        optimizer = optim.Adam(params_to_optimize,
-                            lr=float(args['learning_rate']),
-                            weight_decay=float(args['WD']))
+        optimizer = optim.Adam(params_to_optimize, lr=float(args['learning_rate']), weight_decay=float(args['WD']))
     elif args['optim']=='SGD':
-        optimizer = optim.SGD(params_to_optimize,
-                            lr=float(args['learning_rate']),
-                            weight_decay=float(args['WD']),
-                            momentum=float(args['momentum']))
+        optimizer = optim.SGD(params_to_optimize, lr=float(args['learning_rate']), weight_decay=float(args['WD']), momentum=float(args['momentum']))
     elif args['optim']=='AdamW':
-        optimizer = optim.AdamW(params_to_optimize,
-                            lr=float(args['learning_rate']),
-                            weight_decay=float(args['WD']))
+        optimizer = optim.AdamW(params_to_optimize, lr=float(args['learning_rate']), weight_decay=float(args['WD']))
+    else: raise ValueError(f"Unknown optimizer: {args['optim']}")
+
     if args['use_scheduler']:
-        steps_per_epoch = len(ds)
+        steps_per_epoch = len(train_dataloader)
         if args['scheduler']=='StepLR':
             step_size = steps_per_epoch * args['scheduler_step']
             scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=args['scheduler_gamma'])
@@ -93,8 +89,7 @@ def main(args=None, sam_args=None, saver=None):
         scheduler = None
 
     
-    if args['wandb_watch']:
-        wandb.watch(model, log='all', log_freq=args['wandb_watch_freq'], log_graph=True)
+    if args['wandb_watch']: wandb.watch(model, log='all', log_freq=args['wandb_watch_freq'], log_graph=True)
     
     best = 0
     path_best = os.path.join(saver.path,'best.csv')
@@ -104,22 +99,22 @@ def main(args=None, sam_args=None, saver=None):
     
     for epoch in range(int(args['epoches'])):
         if args['task'] in ['pancreas', 'spleen', 'prostate', 'brats', 'mslesseg']:
-            avg_loss, avg_dice, avg_iou= train_single_epoch_monai(ds, model.train(), sam.eval() if args['use_sam'] else None, optimizer, transform, epoch, args, saver, scheduler, scaler)
+            avg_loss, avg_dice, avg_iou= train_single_epoch_monai(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, transform, epoch, args, saver, scheduler, scaler)
         else:
-            avg_loss= train_single_epoch(ds, model.train(), sam.eval(), optimizer, transform, epoch, args)
+            avg_loss= train_single_epoch(train_dataloader, model.train(), sam.eval(), optimizer, epoch, args)
         saver.log_loss('train_loss', avg_loss, epoch)
         saver.log_loss('train_dice', avg_dice, epoch)
         saver.log_loss('train_iou', avg_iou, epoch)
         with torch.no_grad():
             if args['task'] in ['pancreas', 'spleen', 'prostate', 'brats', 'mslesseg']:
-                dice_true, dice_false, IoU_val, val_loss = inference_ds_monai(ds_val, model.eval(), sam, transform, epoch, args, saver)
+                dice_true, dice_false, IoU_val, val_loss = inference_ds_monai(val_dataloader, model.eval(), sam, transform, epoch, args, saver)
                 saver.log_loss('val_loss', val_loss, epoch)
                 saver.log_loss('IoU', IoU_val, epoch)
                 saver.log_loss('Dice/include_true', dice_true, epoch)
                 saver.log_loss('Dice/include_false', dice_false, epoch)
                 
             else:
-                dice, IoU_val = inference_ds(ds_val, model.eval(), sam, transform, epoch, args)
+                dice, IoU_val = inference_ds(val_dataloader, model.eval(), sam, transform, epoch, args)
                 saver.log_loss('IoU', IoU_val, epoch)
                 saver.log_loss('Dice', dice, epoch)
             if args['best_metric']=='dice_f':

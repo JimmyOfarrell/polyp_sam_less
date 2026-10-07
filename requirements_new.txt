@@ -1,0 +1,11 @@
+matplotlib
+monai
+numpy
+opencv_python
+packaging
+pycocotools
+scipy
+torch
+torchvision
+tqdm
+wandb

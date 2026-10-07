@@ -37,7 +37,7 @@ TEST_DATASETS = [
 # Train / Validation loaders
 # ===========================================================================
 
-def get_dataset(args, img_dim):
+def get_train_val_dataloaders(args, img_dim):
     """
     Build training and validation DataLoaders for polyp segmentation.
 

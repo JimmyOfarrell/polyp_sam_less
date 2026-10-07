@@ -651,8 +651,9 @@ def disable_batchnorm_running_stats(model: nn.Module) -> nn.Module:
     Uses `torch.func.replace_all_batch_norm_modules_` (PyTorch >= 2.0)
     to update every BatchNorm layer in-place consistently:
         - track_running_stats is set to False
-        - running_mean and running_var are set to None
-        - the internal state remains consistent (no RuntimeError in eval).
+        - running_mean, running_var, and num_batches_tracked are removed
+          from the state_dict
+        - the internal state remains consistent across reloads
 
     The counting uses `_BatchNorm` to cover all derived classes
     (BatchNorm1d/2d/3d, SyncBatchNorm, and any future subclasses).
@@ -662,13 +663,16 @@ def disable_batchnorm_running_stats(model: nn.Module) -> nn.Module:
     After calling this function, BatchNorm layers in eval mode will use
     the statistics of the current input batch (per-forward-pass) instead
     of running averages. This means:
-        - In eval mode with batch_size=1, the variance is zero, which
-          can produce NaN outputs. Use batch_size >= 2 for evaluation.
-        - For batch_size=1 inference, consider replacing BatchNorm with
-          GroupNorm or LayerNorm instead.
 
-    For polyp segmentation, where validation and testing use batch_size=1,
-    do NOT enable this feature (keep
+        - For polyp segmentation where validation and testing use
+          batch_size=1, the batch statistics become highly unstable,
+          producing near-zero or erratic outputs. Dice/IoU metrics
+          become meaningless.
+        - Even with batch_size >= 2, the val/test distribution may
+          differ from train, making this feature risky for medical
+          imaging.
+
+    For polyp segmentation, do NOT enable this feature (keep
     `args['disable_batchnorm_running_stats'] = False`).
 
     Parameters
