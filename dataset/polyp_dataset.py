@@ -34,6 +34,8 @@ import json
 from typing import Optional
 from dataset.polyp_transforms import get_polyp_transforms
 from monai.data import CacheDataset
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class PolypDataset(CacheDataset):
@@ -134,6 +136,10 @@ class PolypDataset(CacheDataset):
                 f"Unsupported section: '{self.section}'. "
                 "Available options are ['train', 'validation', 'test']."
             )
+
+        for sample in datalist:
+            sample['image'] = str(PROJECT_ROOT / sample['image'])
+            sample['mask']  = str(PROJECT_ROOT / sample['mask'])
 
         return datalist
 

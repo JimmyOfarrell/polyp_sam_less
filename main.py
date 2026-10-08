@@ -15,29 +15,76 @@ from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
 from utils.scheduler import WarmupCosineSchedule, WarmupLinearSchedule
 
 def main(args=None, sam_args=None, saver=None):
-    requested = str(args['device']).strip()
+    # ============================================================
+    # Device setup (robust)
+    # ============================================================
+    requested = str(args['device']).strip().lower()
     if requested.startswith('cuda'):
         if torch.cuda.is_available():
-            if ':' in requested: args['device'] = torch.device(requested)
-            else: args['device'] = torch.device("cuda:"+str(args['device_id']))    
+            # Use explicit GPU index if given (e.g., 'cuda:1')
+            if ':' in requested:
+                args['device'] = torch.device(requested)
+            else:
+                device_id = int(args.get('device_id', 0))
+                n_gpus = torch.cuda.device_count()
+                if device_id >= n_gpus:
+                    print(f"[WARNING] device_id={device_id} out of range "
+                        f"(only {n_gpus} GPU(s) available). Using cuda:0.")
+                    device_id = 0
+                args['device'] = torch.device(f"cuda:{device_id}")
+            # Set default CUDA device (useful in multi-GPU environments)
+            torch.cuda.set_device(args['device'])
+
+            print(f"[INFO] Using device: {args['device']} "
+                f"({torch.cuda.get_device_name(args['device'])})")
         else:
-            print(f"[WARNING] '{requested}' requested but CUDA not available. Falling back to CPU.")
+            print(f"[WARNING] '{requested}' requested but CUDA not available. "
+                f"Falling back to CPU.")
             args['device'] = torch.device('cpu')
-    else: args['device'] = torch.device('cpu')
-    print(f"[INFO] Using device: {args['device']}")            
+            print(f"[INFO] Using device: {args['device']}")
+    else:
+        if requested not in ('cpu',):
+            print(f"[WARNING] Unknown device '{requested}'. Using CPU.")
+        args['device'] = torch.device('cpu')
+        print(f"[INFO] Using device: {args['device']}")            
 
     
+    # ============================================================
+    # SAM setup
+    # ============================================================
     if args['use_sam']:
-        sam = sam_model_registry[sam_args['model_type']](checkpoint=sam_args['sam_checkpoint'])
+        # Load SAM from checkpoint
+        try:
+            sam = sam_model_registry[sam_args['model_type']](checkpoint=sam_args['sam_checkpoint'])
+        except Exception as e:
+            raise RuntimeError(
+            f"Failed to load SAM '{sam_args['model_type']}' from "
+            f"'{sam_args['sam_checkpoint']}': {e}"
+        )
+
         sam.to(device=args['device'])
+        sam.eval()   # SAM is used as a frozen teacher
+
+        # img_dim = 1024 for SAM ViT-B
         img_dim = sam.image_encoder.img_size
+
+        # Note: SAM is a ViT (LayerNorm only), so disable_batchnorm_running_stats
+        # has no effect on it. Kept for API symmetry with the model below.
         if args['disable_batchnorm_running_stats']: disable_batchnorm_running_stats(sam)
+        print(f"[SAM] Loaded {args['sam_version']} from {sam_args['sam_checkpoint']}")
+        print(f"[SAM] img_dim = {img_dim}")
     else:
         sam = None
         img_dim = int(args['Idim'])
+        print(f"[INFO] SAM disabled; img_dim = {img_dim}")
     
+    # ============================================================
+    # Build DataLoaders (train + val)
+    # ============================================================
     train_dataloader, val_dataloader = get_train_val_dataloaders(args, img_dim)
-    img_ch = train_dataloader.dataset[0][args['image_key']].shape[0]
+    # Polyp images are RGB (3 channels)
+    img_ch = 3
+    print(f"[INFO] Image channels: {img_ch}")
     
     if not args['use_standard_net']: model = get_model(args, sam, img_ch)
     else: model = get_standard_model(args, img_ch)
@@ -156,7 +203,7 @@ if __name__ == '__main__':
     parser.add_argument('--out_channels', type=int, default=1, help='Output channels')
     parser.add_argument('-order', '--order', default=68, type=int, help='HarDNet variant: 39 | 68 | 85', required=False)
     parser.add_argument('-depth_wise', '--depth_wise', type = str2bool, default=False, help='Use depthwise HarDNet', required=False)
-    parser.add_argument('-Idim', '--Idim', default=1024, help='Input image size (resize resolution)', required=False)
+    parser.add_argument('-Idim', '--Idim', type=int, default=1024, help='Input image size (resize resolution)', required=False)
     parser.add_argument('--num_slices', type=int, default=1, help='Number of slices')
     # ============================================================
     # 3) TRAINING HYPERPARAMETERS
@@ -302,6 +349,5 @@ if __name__ == '__main__':
         print(f"[SAM] Model type : {args['sam_version']}")
     else:
         sam_args = None
-
+        
     main(args=args, sam_args=sam_args, saver=saver)
-
