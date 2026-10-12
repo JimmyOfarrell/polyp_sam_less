@@ -199,16 +199,11 @@ class SegmentorNet(nn.Module):
         self.segmentor = None
 
     def init_segmentor_head(self, segmentor_type):
-        if segmentor_type == 'PointwiseConv':
-            self.segmentor = PointwiseCNN(in_channels=256, out_channels=self.out_channels)
-        elif segmentor_type == 'ConvUpsample':
-            self.segmentor = ConvUpsample(in_channels=256, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
-        elif segmentor_type == 'UnetLike':
-            self.segmentor = UnetLikeSegmentor(in_channels=256, decoder_channels=self.args['decoder_channels'], num_classes=self.out_channels)
-        elif segmentor_type == 'TransposeConvUpsample':
-            self.segmentor = TransposeConvUpsample(in_channels=256, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
-        else:
-            raise ValueError('Segmentor not implemented')
+        if segmentor_type == 'PointwiseConv': self.segmentor = PointwiseCNN(in_channels=256, out_channels=self.out_channels)
+        elif segmentor_type == 'ConvUpsample': self.segmentor = ConvUpsample(in_channels=256, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
+        #elif segmentor_type == 'UnetLike': self.segmentor = UnetLikeSegmentor(in_channels=256, decoder_channels=self.args['decoder_channels'], num_classes=self.out_channels)
+        elif segmentor_type == 'TransposeConvUpsample': self.segmentor = TransposeConvUpsample(in_channels=256, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
+        else: raise ValueError('Segmentor not implemented')
 
 class Segmentor2DNet(SegmentorNet):
     is_3d = False
@@ -218,7 +213,6 @@ class Segmentor2DNet(SegmentorNet):
         if x.ndim != 4:
             raise ValueError(f"Expected 2D input (B,C,H,W), got {x.shape}")
         return x
-
 
 class ModelEmbNet(nn.Module):
     """
