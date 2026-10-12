@@ -22,10 +22,23 @@ def sam_call(batched_input, sam, dense_embeddings, args=None):
     return low_res_masks
 
 def get_model(args, sam, img_ch, test = False):
-    if args['model_emb']=='HardNet':
-        model = ModelEmb(args=args).to(args['device'])
+    # ============================================================
+    # Build prompt learner (Phase 1)
+    # ============================================================
+    if args['model_emb'] == 'HardNet':
+        print(f"[INFO] Building prompt learner: {args['model_emb']}")
+        try:
+            model = ModelEmb(args=args).to(args['device'])
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to build ModelEmb (model_emb={args['model_emb']}): {e}"
+            ) from e
+        print(f"[INFO] Model created on {args['device']}")
     else:
-        raise ValueError('Model embedding not implemented')
+        raise ValueError(
+            f"Unsupported model_emb='{args['model_emb']}'. "
+            f"Only 'HardNet' is currently supported."
+        )
     if img_ch == 1:
         #model change layer
         if args['model_emb']=='HardNet':

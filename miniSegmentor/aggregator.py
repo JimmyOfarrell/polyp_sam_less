@@ -6,15 +6,38 @@ from packaging import version
 
 
 class PointwiseCNN(nn.Module):
-    def __init__(self, in_channels=256, out_channels=2, output_size=(512, 512)):
-        super(PointwiseCNN, self).__init__()
-        self.pointwise_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
-        self.output_size = output_size
+    """
+    Lightweight aggregator: 1x1 conv + bilinear upsample to (H, W).
 
-    def forward(self, x):
+    Produces raw logits (no activation). Used as the "aggregator" head
+    in Phase 2 to map dense embeddings → segmentation mask.
+
+    Parameters
+    ----------
+    in_channels : int
+        Input channels (usually 256 from the prompt learner).
+    out_channels : int
+        Output channels (1 for binary polyp, 2 for MS-style).
+    output_size : tuple of int
+        Target spatial size (H, W) for the output mask.
+        Should match ``Idim`` (typically 1024 for SAM ViT-B).
+    """
+
+    def __init__(self, in_channels: int = 256,
+                 out_channels: int = 1,
+                 output_size: tuple = (1024, 1024)):
+        super().__init__()
+        self.pointwise_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        self.output_size = tuple(output_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.pointwise_conv(x)
-        out = interpolate(out, self.output_size, mode='bilinear', align_corners=True)
-        return out
+        if out.shape[-2:] != self.output_size:
+            out = interpolate(
+                out, size=self.output_size,
+                mode='bilinear', align_corners=False,
+            )
+        return out  # raw logits
 
 class ConvBlock(nn.Module):
     """2 convolution 3x3 + BatchNorm + ReLU ."""

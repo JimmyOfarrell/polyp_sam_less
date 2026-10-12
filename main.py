@@ -86,8 +86,17 @@ def main(args=None, sam_args=None, saver=None):
     img_ch = 3
     print(f"[INFO] Image channels: {img_ch}")
     
-    if not args['use_standard_net']: model = get_model(args, sam, img_ch)
-    else: model = get_standard_model(args, img_ch)
+    # ============================================================
+    # Build model
+    #   - Phase 1 (use_standard_net=False): ModelEmb (prompt learner, uses SAM)
+    #   - Phase 2 (use_standard_net=True):  HardNetSegmentor (aggregator only)
+    # ============================================================
+    if not args['use_standard_net']:
+        model = get_model(args, sam, img_ch)
+        print(f"[INFO] Phase 1 model: {type(model).__name__} (prompt learner)")
+    else:
+        model = get_standard_model(args, img_ch)
+        print(f"[INFO] Phase 2 model: {type(model).__name__} (aggregator)")
         
     if args['disable_batchnorm_running_stats']: disable_batchnorm_running_stats(model)
     

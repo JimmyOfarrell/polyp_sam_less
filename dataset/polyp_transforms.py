@@ -138,7 +138,7 @@ def get_polyp_transforms(args, sam_image_dim=None, get_bbox=False):
         RandFlipD(keys=KEYS, prob=0.5, spatial_axis=0),
         RandFlipD(keys=KEYS, prob=0.5, spatial_axis=1),
         RandRotate90D(keys=KEYS, prob=0.5, spatial_axes=(0, 1)),
-        EnsureTyped(keys=KEYS, track_meta=False)
+        EnsureTyped(keys=KEYS, track_meta=True)
     ])
 
     # -------------------------------------------------------------------------
