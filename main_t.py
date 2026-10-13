@@ -20,7 +20,7 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_project', default='polyp_sam_less', help='wandb project name', required=False)
     parser.add_argument('--wandb_entity', default=None, help='WandB entity (username or team)', required=False)
     args = vars(parser.parse_args())
-    
+
     set_seed(args['seed'])
     args['experiment_name'] = args['exp_name']
     output_root = 'results'
@@ -31,4 +31,7 @@ if __name__ == '__main__':
             wandb_project=args['wandb_project'],
             wandb_entity=args['wandb_entity'],
             args=args)
+   saver.log_hparams(args)
+    cmd = "python " + " ".join(sys.argv)
+    saver.log_cmd(cmd)
     print(args)

@@ -163,7 +163,7 @@ class Saver:
             print(f"[WARNING] WandB initialization failed: {type(e).__name__}: {e}")
             print("[WARNING] Continuing without WandB.")
             self.wandb_enabled = False 
-            
+
         print("=" * 72)
         print("[INFO] Saver initialization completed.")
         print(f"[INFO] Local logging          : Enabled")
@@ -427,25 +427,74 @@ class Saver:
         str
             Full path to the saved ``hparams.json`` file.
         """
+        print("\n" + "-" * 68)
+        print("                 HYPERPARAMETER LOGGING")
+        print("-" * 68)
+
+        print(f"[INFO] Number of hyperparameters : {len(params_dict)}")
+        print(f"[INFO] Experiment directory      : {self.path}")
+        print(f"[INFO] WandB enabled             : {self.wandb_enabled}")
+
         # 1) TensorBoard — write as pretty JSON text
+        print("-" * 68)
+        print("[INFO] Preparing hyperparameter configuration...")
         hparams_str = json.dumps(params_dict, indent=2, default=str)
-        self.writer.add_text('hparams', hparams_str, 0)
+        print("[INFO] Hyperparameters serialized successfully.")
+
+        print("-" * 68)
+        print("[INFO] Logging hyperparameters to TensorBoard...")
+
+        try:
+            self.writer.add_text("hparams", hparams_str, 0)
+            print("[INFO] TensorBoard hyperparameters logged successfully.")
+        except Exception as e:
+            print(
+                f"[ERROR] TensorBoard logging failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            raise
 
         # 2) WandB — update run config (skip if disabled)
         #    Note: If wandb.init(config=args) was already called, this
         #    update is redundant but harmless.
+        print("-" * 68)
         if self.wandb_enabled:
+            print("[INFO] Updating WandB configuration...")
             try:
                 wandb.config.update(params_dict, allow_val_change=True)
+                print("[INFO] WandB configuration updated successfully.")
             except Exception as e:
-                print(f"[Saver] WandB config update failed: {e}")
+                print(
+                    f"[WARNING] WandB config update failed: "
+                    f"{type(e).__name__}: {e}"
+                )
+                print("[WARNING] Continuing with local hyperparameter logging.")
+
+        else: print("[INFO] WandB is disabled; skipping configuration update.")        
 
         # 3) JSON file
+        print("-" * 68)
         out_path = os.path.join(self.path, 'hparams.json')
-        with open(out_path, 'w', encoding='utf-8') as fp:
-            json.dump(params_dict, fp, indent=2, default=str, ensure_ascii=False)
+        print("[INFO] Saving hyperparameters to JSON...")
+        print(f"[INFO] JSON output path          : {out_path}")
 
-        print(f"[Saver] Saved hyperparameters: {out_path}")
+        try:
+            with open(out_path, 'w', encoding='utf-8') as fp:
+                json.dump(params_dict, fp, indent=2, default=str, ensure_ascii=False)
+
+            file_size = os.path.getsize(out_path)
+            print("[INFO] Hyperparameters saved successfully.")
+            print(f"[INFO] File size                 : {file_size:,} bytes")
+
+        except Exception as e:
+            print(
+                f"[ERROR] Failed to save hparams.json: "
+                f"{type(e).__name__}: {e}")
+            raise
+        print("-" * 68)
+        print("[INFO] Hyperparameter logging completed.")
+        print(f"[INFO] Saved configuration      : {out_path}")
+        print("=" * 68 + "\n")
         return out_path
 
     def log_cmd(self, cmd: str) -> str:
