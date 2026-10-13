@@ -1,8 +1,9 @@
+import torch
 import torch.nn as nn
 from torch.nn.modules.upsampling import Upsample
 from torch.nn.functional import interpolate
-import torch
 from packaging import version
+from typing import Optional
 
 
 class PointwiseCNN(nn.Module):
@@ -23,20 +24,14 @@ class PointwiseCNN(nn.Module):
         Should match ``Idim`` (typically 1024 for SAM ViT-B).
     """
 
-    def __init__(self, in_channels: int = 256,
-                 out_channels: int = 1,
-                 output_size: tuple = (1024, 1024)):
+    def __init__(self, in_channels: int = 256, out_channels: int = 1, output_size: tuple = (1024, 1024)):
         super().__init__()
         self.pointwise_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
         self.output_size = tuple(output_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.pointwise_conv(x)
-        if out.shape[-2:] != self.output_size:
-            out = interpolate(
-                out, size=self.output_size,
-                mode='bilinear', align_corners=False,
-            )
+        if out.shape[-2:] != self.output_size: out = interpolate(out, size=self.output_size, mode='bilinear', align_corners=False)
         return out  # raw logits
 
 class ConvBlock(nn.Module):
@@ -69,33 +64,118 @@ class Upsample(nn.Module):
     
         
 class TransposeConvUpsample(nn.Module):
-    def __init__(self, in_channels=256, out_channels=2, upsample_factors=[2, 2]):
-        super(TransposeConvUpsample, self).__init__()
+    """
+    Learnable-upsampling aggregator for Phase 2.
+
+    At each step, reduces channels by 2 (via a 1x1 conv) and
+    upsamples by ``factor`` using ``ConvTranspose2d`` (learnable).
+    A final 1x1 conv maps to ``out_channels``.
+
+    Compared to ``ConvUpsample`` (which uses bilinear upsampling),
+    this aggregator has more parameters but can learn the
+    upsampling operator.
+
+    .. warning::
+        ``ConvTranspose2d`` with ``kernel_size == stride`` may produce
+        checkerboard artifacts. Consider using ``ConvUpsample`` if
+        this becomes an issue.
+
+    Parameters
+    ----------
+    in_channels : int, default 256
+        Number of input channels (output of SmallDecoder).
+    out_channels : int, default 1
+        Number of output channels (1 for binary polyp, 2 for MS).
+    upsample_factors : list of int, optional
+        Multiplier at each upsampling step. Default [2, 2].
+    """
+
+    def __init__(self, in_channels: int = 256, out_channels: int = 1, upsample_factors: Optional[list] = None) -> None:
+        super().__init__()
+        if upsample_factors is None: upsample_factors = [2, 2]
+
         layers = []
         current_channels = in_channels
+
         for factor in upsample_factors:
+            # 1x1 conv: halve channels
             layers.append(nn.Conv2d(current_channels, current_channels // 2, kernel_size=1))
+            # Learnable transpose-conv upsampling
             layers.append(nn.ConvTranspose2d(current_channels // 2, current_channels // 2, kernel_size=factor, stride=factor))
             current_channels = current_channels // 2
+
+        # Final 1x1 conv: map to out_channels    
         layers.append(nn.Conv2d(current_channels, out_channels, kernel_size=1))
         self.upsample_net = nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        x : torch.Tensor
+            Dense embeddings, shape (B, in_channels, H, W).
+
+        Returns
+        -------
+        torch.Tensor
+            Raw logits, shape (B, out_channels, H*prod(factors),
+            W*prod(factors)).
+        """
+        
         return self.upsample_net(x)
 
 class ConvUpsample(nn.Module):
-    def __init__(self, in_channels=256, out_channels=2, upsample_factors=[2, 2]):
-        super(ConvUpsample, self).__init__()
+    """
+    Progressive-conv aggregator for Phase 2.
+
+    At each step, reduces the channel dimension by 2 (via a 1x1 conv)
+    and doubles the spatial resolution (via bilinear upsampling).
+    A final 1x1 conv maps to ``out_channels``.
+
+    Matches the aggregator described in the MS-SAM-LESS paper:
+    "two pointwise (1x1) convolution layers, each followed by
+    bilinear upsampling, progressively halving the channel dimension
+    and doubling the spatial resolution."
+
+    Parameters
+    ----------
+    in_channels : int, default 256
+        Number of input channels (output of SmallDecoder).
+    out_channels : int, default 1
+        Number of output channels (1 for binary polyp, 2 for MS).
+    upsample_factors : list of int, optional
+        Multiplier at each upsampling step. Default [2, 2].
+    """
+
+    def __init__(self, in_channels: int = 256, out_channels: int = 1,upsample_factors: Optional[list] = None) -> None:
+        super().__init__()
+        if upsample_factors is None: upsample_factors = [2, 2]
+
         layers = []
         current_channels = in_channels
+
         for factor in upsample_factors:
             layers.append(nn.Conv2d(current_channels, current_channels // 2, kernel_size=1))
-            layers.append(Upsample(scale_factor=factor, mode='bilinear', align_corners=True))
+            layers.append(Upsample(scale_factor=factor, mode='bilinear', align_corners=False))
             current_channels = current_channels // 2
+
         layers.append(nn.Conv2d(current_channels, out_channels, kernel_size=1))
         self.upsample_net = nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        x : torch.Tensor
+            Dense embeddings, shape (B, in_channels, H, W).
+
+        Returns
+        -------
+        torch.Tensor
+            Raw logits, shape (B, out_channels, H*prod(factors),
+            W*prod(factors)).
+        """
+
         return self.upsample_net(x)
     
 class ConvTwoUpsample(nn.Module):

@@ -98,72 +98,161 @@ def main(args=None, sam_args=None, saver=None):
         model = get_standard_model(args, img_ch)
         print(f"[INFO] Phase 2 model: {type(model).__name__} (aggregator)")
         
+    # ============================================================
+    # BatchNorm configuration
+    #   - If True  : disable running stats (uses batch stats in eval).
+    #                Useful for MS (domain adaptation) but NOT for polyp
+    #                (polyp uses batch_size=1 in val/test → destroys output).
+    #   - If False : keep default running stats (standard, safe for polyp).
+    # ============================================================
     if args['disable_batchnorm_running_stats']: disable_batchnorm_running_stats(model)
     
+    # ============================================================
+    # Determine which parameters to optimize
+    #   - Phase 1 (use_sam=True)          : all model parameters
+    #   - Phase 2a (use_sam=False, finetune=False):
+    #                                       only aggregator (segmentor)
+    #   - Phase 2b (use_sam=False, finetune=True):
+    #                                       all model parameters
+    # ============================================================
     if not args['use_sam']:
         if not args['segmentor_finetune_backbone']:
-            for param in model.parameters():
-                param.requires_grad = False
-            for param in model.segmentor.parameters():
-                param.requires_grad = True
+            # Freeze everything, unfreeze only the aggregator
+            for param in model.parameters(): param.requires_grad = False
+            for param in model.segmentor.parameters(): param.requires_grad = True
             params_to_optimize = list(model.segmentor.parameters())
+            print(f"[INFO] Phase 2a: optimizing only the aggregator "
+                  f"({len(params_to_optimize)} tensors)")
         else:
-            for param in model.parameters():
-                param.requires_grad = True
+            # Fine-tune everything
+            for param in model.parameters(): param.requires_grad = True
             params_to_optimize = list(model.parameters())
+            print(f"[INFO] Phase 2b: fine-tuning all parameters "
+                  f"({len(params_to_optimize)} tensors)")
     else:
-        # If using SAM, optimize all model parameters
+        # Phase 1: optimize all ModelEmb parameters
         params_to_optimize = list(model.parameters())
+        print(f"[INFO] Phase 1: optimizing prompt learner "
+              f"({len(params_to_optimize)} tensors)")
+    # Summary
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    trainable_pct = 100.0 * trainable_params / max(total_params, 1)
 
-    if args['optim']=='Adam':
-        optimizer = optim.Adam(params_to_optimize, lr=float(args['learning_rate']), weight_decay=float(args['WD']))
-    elif args['optim']=='SGD':
-        optimizer = optim.SGD(params_to_optimize, lr=float(args['learning_rate']), weight_decay=float(args['WD']), momentum=float(args['momentum']))
-    elif args['optim']=='AdamW':
-        optimizer = optim.AdamW(params_to_optimize, lr=float(args['learning_rate']), weight_decay=float(args['WD']))
+    print(f"[INFO] Total parameters    : {total_params:,} ({total_params / 1e6:.2f}M)")
+    print(f"[INFO] Trainable parameters: {trainable_params:,} "
+          f"({trainable_params / 1e6:.2f}M, {trainable_pct:.2f}%)") 
+
+    # ============================================================
+    # Build optimizer
+    #   - SGD   : stochastic gradient descent (with momentum)
+    #   - Adam  : adaptive moment estimation
+    #   - AdamW : Adam with decoupled weight decay (recommended for polyp)
+    # ============================================================
+    lr, wd = float(args['learning_rate']), float(args['WD'])
+
+    if args['optim'] == 'Adam':optimizer = optim.Adam(params_to_optimize, lr=lr, weight_decay=wd)
+    if args['optim'] == 'SGD':optimizer = optim.SGD(params_to_optimize, lr=lr, weight_decay=wd, momentum=float(args['momentum']))
+    if args['optim'] == 'AdamW':optimizer = optim.AdamW(params_to_optimize, lr=lr, weight_decay=wd)
     else: raise ValueError(f"Unknown optimizer: {args['optim']}")
 
+    n_params = sum(p.numel() for p in params_to_optimize)
+    print(f"[INFO] Optimizer: {type(optimizer).__name__}, "
+          f"lr={lr}, wd={wd}, params={n_params:,}")
+
+
+    # ============================================================
+    # Build scheduler (optional)
+    #   - WarmupCosineSchedule / ReduceLROnPlateau recommended
+    #   - ReduceLROnPlateau calls scheduler.step(loss) in train loop
+    #   - Warmup* schedules call scheduler.step() per iteration
+    # ============================================================
     if args['use_scheduler']:
         steps_per_epoch = len(train_dataloader)
-        if args['scheduler']=='StepLR':
-            step_size = steps_per_epoch * args['scheduler_step']
-            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=args['scheduler_gamma'])
-        elif args['scheduler']== 'MultiStepLR':
-            scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30,80], gamma=args['scheduler_gamma'])
-        elif args['scheduler']== 'ExponentialLR':
-            scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args['scheduler_gamma'])
-        elif args['scheduler']== 'ReduceLROnPlateau':
-            scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=args['scheduler_gamma'], patience=args['scheduler_patience'], verbose=True)
-        elif args['scheduler']== 'CosineAnnealingLR':
-            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args['schedCos_Tmax'], eta_min=args['schedCos_eta_min'], last_epoch=args['schedCos_last_epoch'])            
-        elif args['scheduler']== 'WarmupCosineSchedule':
-            warmup_epochs = args['warmup_epochs']
-            scheduler = WarmupCosineSchedule(optimizer, warmup_steps=steps_per_epoch * warmup_epochs, t_total=steps_per_epoch * args['epoches'], cycles=args['warmup_cycles'], last_epoch=args['schedWarmupCos_last_epoch'])
-            print('Using WarmupCosineSchedule with {} warmup epochs, {} cycles, {} steps per epoch'.format(warmup_epochs, args['warmup_cycles'], steps_per_epoch))
+        sched_type = args['scheduler']
+        gamma = float(args['scheduler_gamma'])
+
+        if sched_type == 'StepLR':
+            step_size = steps_per_epoch * int(args['scheduler_step'])
+            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+
+        elif sched_type == 'MultiStepLR':
+            # Default milestones are scale-aware (relative to total epochs)
+            n_epochs = int(args['epoches'])
+            milestones = [int(n_epochs * 0.3), int(n_epochs * 0.6), int(n_epochs * 0.9)]
+            scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
+
+        elif sched_type == 'ExponentialLR': scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+
+        elif sched_type == 'ReduceLROnPlateau': scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=gamma, patience=int(args['scheduler_patience']))
+
+        elif sched_type == 'CosineAnnealingLR':
+            T_max = int(args['schedCos_Tmax'])
+            # sanity: T_max=10 default is too small for polyp
+            if T_max <= 10: T_max = int(args['epoches'])
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=float(args['schedCos_eta_min']), last_epoch=int(args['schedCos_last_epoch']))            
+
+        elif sched_type == 'WarmupCosineSchedule':
+            warmup_epochs = int(args['warmup_epochs'])
+            scheduler = WarmupCosineSchedule(optimizer, warmup_steps=steps_per_epoch * warmup_epochs, t_total=steps_per_epoch * int(args['epoches']), cycles=float(args['warmup_cycles']), last_epoch=int(args['schedWarmupCos_last_epoch']))
+
         elif args['scheduler']== 'WarmupLinearSchedule':
-            scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args['warmup_steps'], t_total=args['epoches'])
+            warmup_epochs = int(args['warmup_epochs'])
+            scheduler = WarmupLinearSchedule(optimizer, warmup_steps=steps_per_epoch * warmup_epochs, t_total=steps_per_epoch * int(args['epoches']))
+
+        else: raise ValueError(f"Unknown scheduler: {sched_type}")    
+        print(f"[INFO] Scheduler: {sched_type} "
+              f"(steps_per_epoch={steps_per_epoch})")
+
     else:
         scheduler = None
+        print(f"[INFO] Scheduler: None (constant LR)")
 
     
     if args['wandb_watch']: wandb.watch(model, log='all', log_freq=args['wandb_watch_freq'], log_graph=True)
     
+    # ============================================================
+    # Initialize best-model tracking.
+    #   - `best` : best metric value seen so far (higher = better).
+    #   - `f_best`: CSV file to record the history of best metrics.
+    # ============================================================
     best = 0
-    path_best = os.path.join(saver.path,'best.csv')
-    f_best = open(path_best, 'w')
+    path_best = os.path.join(saver.path, 'best.csv')
+    f_best = open(path_best, 'w', encoding='utf-8')
+    f_best.write('epoch,best_metric\n')
+    f_best.flush()
+    print(f"[INFO] Tracking best model in: {path_best}")
 
-    scaler = torch.cuda.amp.GradScaler(enabled=args['use_cuda_amp'])
+    # ============================================================
+    # Mixed Precision (AMP) scaler
+    #   - enabled=True  : uses float16 on CUDA (2x faster, 2x less memory)
+    #   - enabled=False : standard float32 (no-op scaler)
+    #   AMP requires CUDA; on CPU it is automatically disabled.
+    # ============================================================
+    use_amp = bool(args['use_cuda_amp']) and torch.cuda.is_available()
+    scaler = torch.amp.GradScaler(enabled=use_amp)
+    print(f"[INFO] AMP enabled: {use_amp} (requested={args['use_cuda_amp']}, "
+          f"cuda_available={torch.cuda.is_available()})")
     
+    # ============================================================
+    # Training loop
+    # ============================================================
     for epoch in range(int(args['epoches'])):
-        if args['task'] in ['pancreas', 'spleen', 'prostate', 'brats', 'mslesseg']:
-            avg_loss, avg_dice, avg_iou= train_single_epoch_monai(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, transform, epoch, args, saver, scheduler, scaler)
+        # Select training function based on task.
+        # MONAI-based tasks include polyp (dict-based DataLoader).
+        if args['task'] in ['polyp']:
+            avg_loss, avg_dice, avg_iou= train_single_epoch_monai(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, epoch, args, saver, scheduler, scaler)
         else:
-            avg_loss= train_single_epoch(train_dataloader, model.train(), sam.eval(), optimizer, epoch, args)
+            # Legacy tuple-based training (not compatible with polyp)
+            avg_loss= train_single_epoch(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, epoch, args)
+            avg_dice, avg_iou = 0.0, 0.0
+
         saver.log_loss('train_loss', avg_loss, epoch)
         saver.log_loss('train_dice', avg_dice, epoch)
         saver.log_loss('train_iou', avg_iou, epoch)
+        
         with torch.no_grad():
-            if args['task'] in ['pancreas', 'spleen', 'prostate', 'brats', 'mslesseg']:
+            if args['task'] in ['polyp']:
                 dice_true, dice_false, IoU_val, val_loss = inference_ds_monai(val_dataloader, model.eval(), sam, transform, epoch, args, saver)
                 saver.log_loss('val_loss', val_loss, epoch)
                 saver.log_loss('IoU', IoU_val, epoch)
@@ -192,7 +281,11 @@ def main(args=None, sam_args=None, saver=None):
         if epoch % int(args['save_every']) == 0 or epoch == int(args['epoches'])-1:
             saver.save_model(model, 'net_last', epoch)
         
-    f_best.close()
+    try:
+        f_best.close()
+        print(f"[INFO] Closed: {path_best}")
+
+    except Exception as e: print(f"[WARNING] Failed to close {path_best}: {e}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Polyp Segmentation with SAM-guided Prompt Learning')

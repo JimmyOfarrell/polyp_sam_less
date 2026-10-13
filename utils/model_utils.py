@@ -143,47 +143,82 @@ def get_model(args: dict, sam, img_ch: int, test: bool = False):
     return model
 
 def get_standard_model(args, img_ch=3):
-    if args['net']=='HardNetSegmentor' and args['task'] in ['pancreas', 'spleen', 'prostate', 'mslesseg']:
+    if args['net'] == 'HardNetSegmentor' and args['task'] in ['polyp']:
         model = HardNetSegmentor(args, segmentor=args['net_segmentor']).to(args['device'])
+        print(f"[get_standard_model] Built HardNetSegmentor "
+              f"(segmentor={args['net_segmentor']}) on {args['device']}")
     else:
-        raise ValueError('Model not implemented')
+        raise ValueError(
+        f"Model not implemented for net='{args['net']}' and "
+        f"task='{args['task']}'. "
+        f"Supported: net='HardNetSegmentor' with tasks in "
+        f"{{'pancreas', 'spleen', 'prostate', 'mslesseg', 'polyp'}}.")
     
-    if img_ch == 1 and not args['net']=='Unet':
-        #model change layer
-        if args['net']=='HardNetSegmentor':
-            old_layer = model.backbone.base[0].conv
-        else:
-            raise ValueError('Model not implemented')
+    if img_ch == 1 and args['net'] != 'Unet':
+         # ============================================================
+        # Input is grayscale (1-channel). Replace the first conv layer
+        # of HardNetSegmentor's backbone to accept 1-channel input.
+        # Pretrained ImageNet weights (3-channel) are averaged over RGB.
+        # ============================================================
+
+        if args['net'] != 'HardNetSegmentor':
+            raise ValueError(
+                f"Model '{args['net']}' not implemented for grayscale conversion. "
+                f"Only 'HardNetSegmentor' is supported.")
+        
+        old_layer = model.backbone.base[0].conv
         old_weights = old_layer.weight.clone()
-        new_weights = old_weights.mean(dim=1, keepdim=True)
-        new_layer = torch.nn.Conv2d(1, old_layer.out_channels, old_layer.kernel_size, old_layer.stride, old_layer.padding, bias=old_layer.bias)
+        new_weights = old_weights.mean(dim=1, keepdim=True)  # (out, 1, k, k)
+
+        has_bias = old_layer.bias is not None
+        new_layer = torch.nn.Conv2d(1, old_layer.out_channels, old_layer.kernel_size, old_layer.stride, old_layer.padding, bias=has_bias)
         new_layer.weight.data = new_weights.data
-        if args['net']=='HardNetSegmentor':
-            model.backbone.base[0].conv = new_layer
-        else:
-            raise ValueError('Model not implemented')
+        if has_bias: new_layer.bias.data = old_layer.bias.data
+
+        model.backbone.base[0].conv = new_layer
+        print(f"[get_standard_model] HardNetSegmentor: first conv layer "
+              f"changed to 1-channel input")
 
     if args['ckpt_path'] is not None:
-        torch_version = version.parse(torch.__version__)
-        if torch_version >= version.parse('1.13.0'):
-            ckpt_model = torch.load(args['ckpt_path'], weights_only=False)
-        else:
-            ckpt_model = torch.load(args['ckpt_path'])
-        #ckpt_model = torch.load(args['ckpt_path'])
-        if not args['use_sam'] and 'segmentor_finetune_backbone' in args.keys():
-            strict = False #if args['segmentor_finetune_backbone'] else True
-        else:
-            strict=True
-        
-        if not isinstance(ckpt_model, dict):
-            layers = model.load_state_dict(ckpt_model.state_dict(), strict=strict)
-            print(f'Model loaded with strict {strict}')
-        else:
-            layers =  model.load_state_dict(ckpt_model, strict=strict)
-            print(f'Model loaded with strict {strict}')
-        if strict==False:
-            print("************************************")
-            print('Layers not loaded:')
-            print(layers)
-            print("************************************")
+        ckpt_path = args['ckpt_path']
+        print(f"[get_standard_model] Loading checkpoint: {ckpt_path}")
+
+        # --- Load checkpoint on CPU ---
+        try:
+            torch_version = version.parse(torch.__version__)
+            if torch_version >= version.parse('1.13.0'): ckpt_model = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+            else: ckpt_model = torch.load(ckpt_path, map_location='cpu')
+        except Exception as e:
+            raise RuntimeError(f"Failed to load checkpoint '{ckpt_path}': {e}") from e
+
+        # --- Determine strictness ---
+        # Phase 1 (use_sam=True): strict=True
+        # Phase 2a (use_sam=False, segmentor_finetune_backbone=False):
+        # ckpt from Phase 1 → no segmentor → strict=False
+        # Phase 2b (use_sam=False, segmentor_finetune_backbone=True):
+        # ckpt from Phase 2a → has segmentor → strict=True  
+        #   
+        if not args['use_sam']:
+            # Phase 2
+            finetune_backbone = args.get('segmentor_finetune_backbone', False)
+            strict = bool(finetune_backbone)
+        else: strict = True  # Phase 1    
+
+        # --- Extract state_dict ---
+        if isinstance(ckpt_model, dict): state_dict = ckpt_model
+        else: state_dict = ckpt_model.state_dict()
+
+        # --- Load into model ---
+        try: result = model.load_state_dict(state_dict, strict=strict)
+        except RuntimeError as e: raise RuntimeError(f"Failed to load state_dict into model: {e}") from e
+
+        print(f"[get_standard_model] Checkpoint loaded (strict={strict})")
+
+        if not strict:
+            if result.missing_keys:
+                print(f"[get_standard_model]   Missing keys   : {len(result.missing_keys)}")
+                for key in result.missing_keys[:5]: print(f"   - {key}")
+            if result.unexpected_keys: print(f"[get_standard_model]   Unexpected keys: {len(result.unexpected_keys)}")
+            for key in result.unexpected_keys[:5]: print(f"   - {key}")
+
     return model

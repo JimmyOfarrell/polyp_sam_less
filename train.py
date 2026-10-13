@@ -36,7 +36,14 @@ def train_single_epoch(ds, model, sam, optimizer, epoch, args):
             ))
     return np.mean(loss_list)
 
-def train_single_epoch_monai(ds, model, sam, optimizer, transform, epoch, args, saver, scheduler=None, scaler=None):
+def train_single_epoch_monai(ds, model, sam, optimizer, epoch, args, saver, scheduler=None, scaler=None):
+    # ============================================================
+    # Transforms for post-processing (metrics and visualization)
+    #   - one_hot    : (B, 1, H, W) binary  → (B, 2, H, W) one-hot
+    #   - post_trans : probabilities [0, 1] → binary {0, 1} (threshold=0.5)
+    #   - sigmoid    : only used for 2-channel outputs (MS-style)
+    #                  For polyp (out_channels=1) it is unused.
+    # ============================================================
     one_hot = AsDiscrete(to_onehot=2, dim=1)
     post_trans = AsDiscrete(threshold=args['theashold_discretize'])
     sigmoid = Activations(sigmoid=True)

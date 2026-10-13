@@ -185,33 +185,84 @@ class BottleneckBlock(nn.Module):
         x = F.relu(self.BN2(x))
         return x
     
-
-
 class SegmentorNet(nn.Module):
-    """Base class for segmentor networks."""
+    """
+    Base class for segmentor networks (Phase 2).
+
+    Subclasses must call ``init_segmentor_head`` to build the aggregator
+    that replaces SAM at inference time.
+    """
+
     is_segmentor = True
     is_3d = None
 
-    def __init__(self, args, out_channels):
+    def __init__(self, args: dict, out_channels: int) -> None:
+        """
+        Parameters
+        ----------
+        args : dict
+            Configuration dictionary. Must contain 'upsample_factor_list'
+            for ConvUpsample/TransposeConvUpsample aggregators.
+        out_channels : int
+            Number of output channels (1 for binary polyp, 2 for MS).
+        """
         super().__init__()
         self.args = args
         self.out_channels = out_channels
         self.segmentor = None
 
-    def init_segmentor_head(self, segmentor_type):
-        if segmentor_type == 'PointwiseConv': self.segmentor = PointwiseCNN(in_channels=256, out_channels=self.out_channels)
-        elif segmentor_type == 'ConvUpsample': self.segmentor = ConvUpsample(in_channels=256, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
-        #elif segmentor_type == 'UnetLike': self.segmentor = UnetLikeSegmentor(in_channels=256, decoder_channels=self.args['decoder_channels'], num_classes=self.out_channels)
-        elif segmentor_type == 'TransposeConvUpsample': self.segmentor = TransposeConvUpsample(in_channels=256, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
-        else: raise ValueError('Segmentor not implemented')
+    def init_segmentor_head(self, segmentor_type: str, in_channels: int = 256) -> None:
+        if segmentor_type == 'PointwiseConv':
+            Idim = int(self.args.get('Idim', 1024))
+            self.segmentor = PointwiseCNN(in_channels=in_channels, out_channels=self.out_channels,output_size=(Idim, Idim))
+        elif segmentor_type == 'ConvUpsample':
+            self.segmentor = ConvUpsample(in_channels=in_channels, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
+        elif segmentor_type == 'TransposeConvUpsample':
+            self.segmentor = TransposeConvUpsample(in_channels=in_channels, out_channels=self.out_channels, upsample_factors=self.args['upsample_factor_list'])
+        else:
+            raise ValueError(
+                f"Segmentor '{segmentor_type}' not implemented. "
+                f"Choose from: PointwiseConv, ConvUpsample, "
+                f"TransposeConvUpsample.")
+        
+        print(f"[SegmentorNet] Aggregator built: {segmentor_type} "
+              f"(in={in_channels}, out={self.out_channels})")
 
 class Segmentor2DNet(SegmentorNet):
+    """
+    2D variant of SegmentorNet.
+
+    Overrides ``is_3d`` to False, allowing downstream code to branch
+    on the dimensionality of the input. Inputs are expected in
+    (B, C, H, W) format.
+    """
+
     is_3d = False
 
-          
-    def preprocess(self, x):
+    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Validate that the input tensor is 4D (B, C, H, W).
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor.
+
+        Returns
+        -------
+        torch.Tensor
+            The same tensor, unchanged.
+
+        Raises
+        ------
+        ValueError
+            If the input is not 4D.
+        """
+
         if x.ndim != 4:
-            raise ValueError(f"Expected 2D input (B,C,H,W), got {x.shape}")
+            raise ValueError(
+                f"Segmentor2DNet expects 4D input (B, C, H, W), "
+                f"got shape {tuple(x.shape)} with ndim={x.ndim}.")
         return x
 
 class ModelEmbNet(nn.Module):
