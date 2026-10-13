@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from utils.saver import Saver
 from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
 if __name__ == '__main__':
@@ -31,7 +32,7 @@ if __name__ == '__main__':
             wandb_project=args['wandb_project'],
             wandb_entity=args['wandb_entity'],
             args=args)
-   saver.log_hparams(args)
+    saver.log_hparams(args)
     cmd = "python " + " ".join(sys.argv)
     saver.log_cmd(cmd)
     print(args)
