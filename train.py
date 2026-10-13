@@ -47,34 +47,90 @@ def train_single_epoch_monai(ds, model, sam, optimizer, epoch, args, saver, sche
     one_hot = AsDiscrete(to_onehot=2, dim=1)
     post_trans = AsDiscrete(threshold=args['theashold_discretize'])
     sigmoid = Activations(sigmoid=True)
-    
+
+    # ============================================================
+    # Metrics (foreground-only for polyp)
+    #   - include_background=False: Dice/IoU computed ONLY on polyp,
+    #     not averaged with the (very easy) background class.
+    #   - Cumulative: reset() must be called after each batch.
+    # ============================================================
     diceMetric = DiceMetric(include_background=args['include_background'], reduction='mean')
     iouMetric = MeanIoU(include_background=args['include_background'], reduction='mean')
     
-    iou_list = []
-    dice_list = []
-    loss_list = []
+    # ============================================================
+    # Per-epoch accumulators and progress bar
+    #   - lists store per-batch metrics; averaged at the end of epoch
+    #   - pbar wraps the DataLoader for live progress display
+    # ============================================================
+    iou_list: list = []
+    dice_list: list = []
+    loss_list: list = []
     pbar = tqdm(ds)
 
-    apply_sigm = True if (getattr(model, "is_segmentor", False) or args['net']=='Unet') and args['use_standard_net'] else False
-    if args['criterion'] == 'dice':
-        criterion = DiceLoss(include_background=args['include_background'], sigmoid=apply_sigm)
-    elif args['criterion'] == 'dice_ce':
-        criterion = DiceCELoss(include_background=args['include_background'], sigmoid=apply_sigm)
+    # ============================================================
+    # Determine if the loss should apply sigmoid internally.
+    #   - Phase 1 (ModelEmb + SAM): masks are probabilities → sigmoid=False
+    #   - Phase 2 (HardNetSegmentor): masks are raw logits → sigmoid=True
+    # ============================================================
+    apply_sigm = bool((getattr(model, "is_segmentor", False) or args['net'] == 'Unet') and args['use_standard_net']
+)
+    if args['criterion'] == 'dice': criterion = DiceLoss(include_background=args['include_background'], sigmoid=apply_sigm)
+    elif args['criterion'] == 'dice_ce': criterion = DiceCELoss(include_background=args['include_background'], sigmoid=apply_sigm)
     else:
-        raise ValueError('Criterion not recognized')
+        raise ValueError(
+        f"Criterion '{args['criterion']}' not recognized. "
+        f"Choose from: 'dice', 'dice_ce'.")
 
+    # ============================================================
+    # Idim: target input size (used by F.interpolate above).
+    # optimizer.zero_grad(): clears accumulated gradients at the
+    # start of the epoch (safe flush before the training loop).
+    # ============================================================
     Idim = int(args['Idim'])
     optimizer.zero_grad()
 
-    for ix,  sample in enumerate(pbar):      
+    # ============================================================
+    # Training loop over the DataLoader
+    # ============================================================
+    for ix, sample in enumerate(pbar):
+        # --------------------------------------------------------
+        # 1) Handle the MS-style crop-based output.
+        #    RandCropByPosNegLabeld returns a list of dicts (one per
+        #    crop). We use the first crop. For polyp, `sample` is a
+        #    plain dict, so this branch is skipped.
+        # --------------------------------------------------------
         if isinstance(sample, list): sample = sample[0]
+        # --------------------------------------------------------
+        # 2) Extract image and mask from the batch.
+        #
+        #    Polyp (2D RGB):
+        #        imgs : (B, 3, 1024, 1024)
+        #        gts  : (B, 1, 1024, 1024)
+        #        squeeze(-1) -> no-op (last dim is width, not 1)
+        #
+        #    MS (3D medical):
+        #        imgs : (B, C, H, W, 1)  -> squeeze -> (B, C, H, W)
+        #        gts  : (B, 1, H, W, 1)  -> squeeze -> (B, 1, H, W)
+        # --------------------------------------------------------
         imgs = sample[args['image_key']].squeeze(-1)
-        gts = sample[args['mask_key']].squeeze(-1)
+        gts  = sample[args['mask_key']].squeeze(-1)
 
+        # ============================================================
+        # Batch size and placeholder size tensors.
+        #   - For polyp, all images are resized to (Idim, Idim) by the
+        #     transforms, so `original_sz` and `img_sz` are constant.
+        #   - `sam_call` in the polyp pipeline does NOT consume these
+        #     fields; they are kept for API compatibility with the MS
+        #     `get_input_dict`.
+        # ============================================================
         B = imgs.shape[0]
-        original_sz = torch.tensor([[1024, 1024]] * B, dtype=torch.int64)
+        
+        original_sz = torch.tensor([[Idim, Idim]] * B, dtype=torch.int64)
         img_sz = torch.tensor(imgs.shape[2:]).repeat(B, 1)
+
+        # ============================================================
+        # Move image and GT to the target device (GPU/CPU).
+        # ============================================================
         orig_imgs = imgs.to(args['device'])
         gts = gts.to(args['device'])
         

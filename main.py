@@ -288,7 +288,17 @@ def main(args=None, sam_args=None, saver=None):
     except Exception as e: print(f"[WARNING] Failed to close {path_best}: {e}")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Polyp Segmentation with SAM-guided Prompt Learning')
+    parser = argparse.ArgumentParser(description="""
+    ============================================================
+                POLYP SEGMENTATION FRAMEWORK
+    ============================================================
+    Method : SAM-Guided Prompt Learning
+    Task   : Automated Polyp Segmentation
+    Input  : Colonoscopy RGB Images
+    Output : Binary Polyp Segmentation Masks
+    ============================================================
+ """)
+    print(parser.description)
     # ============================================================
     # 1) CORE / TASK
     # ============================================================
@@ -407,8 +417,7 @@ if __name__ == '__main__':
         wandb_mode=args['wandb_mode'],
         wandb_project=args['wandb_project'],
         wandb_entity=args['wandb_entity'],
-        args=args,
-    )
+        args=args)
 
     # Log hyperparameters and command
     saver.log_hparams(args)

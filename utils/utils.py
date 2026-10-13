@@ -47,12 +47,34 @@ def set_seed(seed: int, strict: bool = True) -> None:
         If False, sets cudnn.deterministic=False and cudnn.benchmark=True
         (faster but not fully reproducible across runs on GPU).
     """
+    print("\n" + "=" * 60)
+    print("             RANDOM SEED CONFIGURATION")
+    print("=" * 60)
+
+    print(f"[INFO] Random seed             : {seed}")
+    print(f"[INFO] Strict reproducibility  : {strict}")
     os.environ["PYTHONHASHSEED"] = str(seed)
     set_determinism(seed=seed)
 
     if not strict:
         torch.backends.cudnn.deterministic = False
         torch.backends.cudnn.benchmark = True
+
+    print("-" * 60)
+    print("[INFO] Random seeds initialized successfully.")
+    print(f"[INFO] PYTHONHASHSEED          : {os.environ.get('PYTHONHASHSEED')}")
+    print(f"[INFO] cuDNN deterministic     : {torch.backends.cudnn.deterministic}")
+    print(f"[INFO] cuDNN benchmark         : {torch.backends.cudnn.benchmark}")
+    print(f"[INFO] CUDA available          : {torch.cuda.is_available()}") 
+    
+    if torch.cuda.is_available():
+        print(f"[INFO] CUDA device count       : {torch.cuda.device_count()}")
+        print(f"[INFO] Current CUDA device     : {torch.cuda.current_device()}")
+        print(f"[INFO] GPU name                : {torch.cuda.get_device_name(torch.cuda.current_device())}")
+
+    print("=" * 60)
+    print("[INFO] Seed configuration completed.")
+    print("=" * 60 + "\n")   
 
 
 # ===========================================================================

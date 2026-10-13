@@ -54,16 +54,7 @@ class Saver:
     metrics_table : wandb.Table or None
         WandB table used for cross-run comparison.
     """
-
-    def __init__(
-        self,
-        output_folder: Path,
-        experiment_name: str,
-        wandb_mode: str,
-        wandb_project: str,
-        wandb_entity: str,
-        args: dict,
-    ):
+    def __init__(self, output_folder: Path, experiment_name: str, wandb_mode: str, wandb_project: str, wandb_entity: str, args: dict):
         """
         Parameters
         ----------
@@ -80,18 +71,33 @@ class Saver:
         args : dict
             Full argument dictionary (logged as WandB config and saved to disk).
         """
+        print("\n" + "=" * 72)
+        print("                  EXPERIMENT LOGGER INITIALIZATION")
+        print("=" * 72)
+
+        print(f"[INFO] Experiment name       : {experiment_name}")
+        print(f"[INFO] Output directory      : {output_folder}")
+        print(f"[INFO] WandB mode            : {wandb_mode}")
+        print(f"[INFO] WandB project         : {wandb_project}")
+        print(f"[INFO] Configuration entries : {len(args)}")
         # ------------------------------------------------------------
         # 1) Create timestamped experiment folder
         # ------------------------------------------------------------
         timestamp_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         self.path = os.path.join(output_folder, f'{timestamp_str}_{experiment_name}')
         os.makedirs(self.path, exist_ok=True)
+        print("-" * 72)
+        print("[INFO] Experiment directory created.")
         print(f"[Saver] Results will be saved to: {self.path}")
 
         # ------------------------------------------------------------
         # 2) TensorBoard writer
         # ------------------------------------------------------------
+        print("-" * 72)
+        print("[INFO] Initializing TensorBoard...")
         self.writer = SummaryWriter(str(self.path), flush_secs=30)
+        print("[INFO] TensorBoard initialized successfully.")
+        print(f"[INFO] TensorBoard log path   : {self.path}")
 
         # ------------------------------------------------------------
         # 3) CSV metrics log (with header for easy pandas reading)
@@ -99,6 +105,10 @@ class Saver:
         self.csv_file = os.path.join(self.path, 'metrics.csv')
         with open(self.csv_file, 'w', encoding='UTF8', newline='') as f:
             csv.writer(f).writerow(['metric', 'epoch', 'value'])
+        print("-" * 72)
+        print("[INFO] Metrics CSV created.")
+        print(f"[INFO] CSV path               : {self.csv_file}")
+        print("[INFO] CSV columns            : metric, epoch, value")    
 
         # ------------------------------------------------------------
         # 4) Sub-folders for checkpoints and visualizations
@@ -107,6 +117,10 @@ class Saver:
         self.vis_path  = os.path.join(self.path, 'vis')
         os.makedirs(self.ckpt_path, exist_ok=True)
         os.makedirs(self.vis_path,  exist_ok=True)
+        print("-" * 72)
+        print("[INFO] Output subdirectories initialized.")
+        print(f"[INFO] Checkpoint directory   : {self.ckpt_path}")
+        print(f"[INFO] Visualization directory: {self.vis_path}")
 
         # ------------------------------------------------------------
         # 5) WandB metrics table buffers
@@ -114,11 +128,16 @@ class Saver:
         self.metrics_table: wandb.Table | None = None
         self.columns: list[str] | None = None
         self.rows: list[list] = []
+        print("-" * 72)
+        print("[INFO] WandB metrics table buffers initialized.")
+        print("[INFO] Initial table state    : Empty")
 
         # ------------------------------------------------------------
         # 6) Initialize WandB (safely — never crash the training run)
         # ------------------------------------------------------------
         self.wandb_enabled = False
+        print("-" * 72)
+        print("[INFO] Initializing Weights & Biases...")
         try:
             wandb.init(
                 project=wandb_project,
@@ -130,14 +149,28 @@ class Saver:
                 reinit=True,
             )
             self.wandb_enabled = (wandb_mode != 'disabled') and (wandb.run is not None)
+
             if self.wandb_enabled:
-                print(f"[Saver] WandB run: {wandb.run.name} (id: {wandb.run.id})")
+                print("[INFO] WandB initialized successfully.")
+                print(f"[INFO] WandB run name        : {wandb.run.name}")
+                print(f"[INFO] WandB run ID          : {wandb.run.id}")
+                print(f"[INFO] WandB project URL     : {wandb.run.url}")
+
             else:
-                print("[Saver] WandB disabled.")
+                 print("[INFO] WandB logging is disabled or no active run exists.")
+
         except Exception as e:
-            print(f"[Saver] WandB init failed: {e}")
-            print("[Saver] Continuing without WandB.")
-            self.wandb_enabled = False   
+            print(f"[WARNING] WandB initialization failed: {type(e).__name__}: {e}")
+            print("[WARNING] Continuing without WandB.")
+            self.wandb_enabled = False 
+            
+        print("=" * 72)
+        print("[INFO] Saver initialization completed.")
+        print(f"[INFO] Local logging          : Enabled")
+        print(f"[INFO] TensorBoard            : Enabled")
+        print(f"[INFO] CSV logging            : Enabled")
+        print(f"[INFO] WandB logging          : {self.wandb_enabled}")
+    print("=" * 72 + "\n")      
 
     def save_model(self, net: nn.Module, name: str, step: int) -> None:
         """
