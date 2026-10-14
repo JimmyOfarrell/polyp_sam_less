@@ -56,6 +56,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
         # Load SAM from checkpoint
         try:
             sam = sam_model_registry[sam_args['model_type']](checkpoint=sam_args['sam_checkpoint'])
+            print(f"[INFO] Loading SAM model: {sam_args['model_type']}")
         except Exception as e:
             raise RuntimeError(
             f"Failed to load SAM '{sam_args['model_type']}' from "
@@ -64,15 +65,11 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
 
         sam.to(device=args['device'])
         sam.eval()   # SAM is used as a frozen teacher
+        print(f"[INFO] SAM model loaded and moved to {args['device']}; evaluation mode enabled.")
 
         # img_dim = 1024 for SAM ViT-B
         img_dim = sam.image_encoder.img_size
-
-        # Note: SAM is a ViT (LayerNorm only), so disable_batchnorm_running_stats
-        # has no effect on it. Kept for API symmetry with the model below.
-        if args['disable_batchnorm_running_stats']: disable_batchnorm_running_stats(sam)
-        print(f"[SAM] Loaded {args['sam_version']} from {sam_args['sam_checkpoint']}")
-        print(f"[SAM] img_dim = {img_dim}")
+        
     else:
         sam = None
         img_dim = int(args['Idim'])

@@ -2,39 +2,61 @@ import argparse
 import torch
 import os
 import sys
+from segment_anything import sam_model_registry
+from utils.dataset_utils import get_train_val_dataloaders
 from utils.saver import Saver
 from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
 
 def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | None = None) -> None:
-        requested = str(args['device']).strip().lower()
-        if requested.startswith('cuda'):
-             if torch.cuda.is_available():
-                 # Use explicit GPU index if given (e.g., 'cuda:1')
-                 if ':' in requested:
-                     args['device'] = torch.device(requested)
-                 else:
-                     device_id = int(args.get('device_id', 0))
-                     n_gpus = torch.cuda.device_count()
-                     if device_id >= n_gpus:
-                         print(f"[WARNING] device_id={device_id} out of range "
-                             f"(only {n_gpus} GPU(s) available). Using cuda:0.")
-                         device_id = 0
-                     args['device'] = torch.device(f"cuda:{device_id}")
-                 # Set default CUDA device (useful in multi-GPU environments)
-                 torch.cuda.set_device(args['device'])
-     
-                 print(f"[INFO] Using device: {args['device']} "
-                     f"({torch.cuda.get_device_name(args['device'])})")
-             else:
-                 print(f"[WARNING] '{requested}' requested but CUDA not available. "
-                     f"Falling back to CPU.")
-                 args['device'] = torch.device('cpu')
-                 print(f"[INFO] Using device: {args['device']}")
+    requested = str(args['device']).strip().lower()
+    if requested.startswith('cuda'):
+        if torch.cuda.is_available():
+            # Use explicit GPU index if given (e.g., 'cuda:1')
+            if ':' in requested:
+                args['device'] = torch.device(requested)
+            else:
+                device_id = int(args.get('device_id', 0))
+                n_gpus = torch.cuda.device_count()
+                if device_id >= n_gpus:
+                    print(f"[WARNING] device_id={device_id} out of range "
+                          f"(only {n_gpus} GPU(s) available). Using cuda:0.")
+                    device_id = 0
+                args['device'] = torch.device(f"cuda:{device_id}")
+            # Set default CUDA device (useful in multi-GPU environments)
+            torch.cuda.set_device(args['device'])
+            print(f"[INFO] Using device: {args['device']} "
+                  f"({torch.cuda.get_device_name(args['device'])})")
         else:
-                if requested not in ('cpu',): print(f"[WARNING] Unknown device '{requested}'. Using CPU.")
-                args['device'] = torch.device('cpu')
-                print(f"[INFO] Using device: {args['device']}")
+            print(f"[WARNING] '{requested}' requested but CUDA not available. "
+                  f"Falling back to CPU.")
+            args['device'] = torch.device('cpu')
+            print(f"[INFO] Using device: {args['device']}")
+    else:
+        if requested not in ('cpu',): print(f"[WARNING] Unknown device '{requested}'. Using CPU.")
+        args['device'] = torch.device('cpu')
+        print(f"[INFO] Using device: {args['device']}")
 
+    if args['use_sam']:
+        try:
+            sam = sam_model_registry[sam_args['model_type']](checkpoint=sam_args['sam_checkpoint'])
+            print(f"[INFO] Loading SAM model: {sam_args['model_type']}")
+
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load SAM '{sam_args['model_type']}' from "
+                f"'{sam_args['sam_checkpoint']}': {e}")    
+
+        sam.to(device=args['device'])
+        sam.eval()
+        print(f"[INFO] SAM model loaded and moved to {args['device']}; evaluation mode enabled.")
+        img_dim = sam.image_encoder.img_size
+    else:
+        sam = None
+        img_dim = int(args['Idim'])
+        print(f"[INFO] SAM disabled; img_dim = {img_dim}")
+
+    train_dataloader, val_dataloader = get_train_val_dataloaders(args, img_dim)
+    print(f"[INFO] Data loaders initialized | Train batches: {len(train_dataloader)} | Validation batches: {len(val_dataloader)}")
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="""
     ============================================================
@@ -57,6 +79,13 @@ if __name__ == '__main__':
     parser.add_argument('--sam_version', type=str, default='vit_b', choices = ['vit_b', 'vit_h'], help='SAM version')
     parser.add_argument('--device_id', default=0, help='GPU index', required=False)
     parser.add_argument('--device', default='cuda', help="Device: 'cuda' or 'cpu'", required=False)
+    parser.add_argument('-Idim', '--Idim', type=int, default=512, help='Input image size', required=False)
+    parser.add_argument('-bs', '--Batch_size', default=2, help='Batch size', required=False)
+    parser.add_argument('--split_path', type=str, default='data/split.json', help='Path to the JSON split file')
+    parser.add_argument('--n_fold', type=int, default=0, help='Fold index')
+    parser.add_argument('--cache_rate', type=float, default=0.0, help='Dataset cache rate (0.0 to 1.0)')
+    parser.add_argument('--image_key', type=str, default='image',help='Key for image in the data dict')
+    parser.add_argument('--mask_key', type=str, default='mask', help='Key for mask in the data dict')
     args = vars(parser.parse_args())
 
     set_seed(args['seed'])
