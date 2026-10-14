@@ -14,7 +14,7 @@ from segment_anything import sam_model_registry
 from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
 from utils.scheduler import WarmupCosineSchedule, WarmupLinearSchedule
 
-def main(args=None, sam_args=None, saver=None):
+def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | None = None) -> None:
     # ============================================================
     # Device setup (robust)
     # ============================================================
@@ -428,7 +428,6 @@ if __name__ == '__main__':
     if args['use_sam']:
         project_dir = os.path.dirname(os.path.abspath(__file__))
         sam_ckpt = os.path.join(project_dir, 'cp', f"{args['sam_ckpt']}.pth")
-        print(f"[INFO] SAM checkpoint path: {sam_ckpt}")
 
         if not os.path.exists(sam_ckpt):
             raise FileNotFoundError(
@@ -451,9 +450,10 @@ if __name__ == '__main__':
             },
             'gpu_id': args['device_id'],
         }
-        print(f"[SAM] Checkpoint : {sam_ckpt}")
-        print(f"[SAM] Model type : {args['sam_version']}")
+        print(f"[INFO] SAM checkpoint path: {sam_ckpt}")
+        print(f"[INFO] SAM Model type : {args['sam_version']}")
     else:
         sam_args = None
+        print("[INFO] SAM is disabled.")
         
     main(args=args, sam_args=sam_args, saver=saver)
