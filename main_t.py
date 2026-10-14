@@ -17,15 +17,23 @@ if __name__ == '__main__':
     print(parser.description)
     parser.add_argument('--exp_name', required=True, help='Experiment name (required)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--wandb_mode', default='online', choices=['online', 'offline', 'disabled'], help='wandb mode', required=False)
-    parser.add_argument('--wandb_project', default='polyp_sam_less', help='wandb project name', required=False)
+    parser.add_argument('--wandb_mode', default='online', choices=['online', 'offline', 'disabled'], help='WandB mode', required=False)
+    parser.add_argument('--wandb_project', default='polyp_sam_less', help='WandB project name', required=False)
     parser.add_argument('--wandb_entity', default=None, help='WandB entity (username or team)', required=False)
     args = vars(parser.parse_args())
 
     set_seed(args['seed'])
+
     args['experiment_name'] = args['exp_name']
     output_root = 'results'
     args['exp_folder'] = os.path.join(output_root, args['experiment_name'])
+    print(f"[INFO] Experiment output directory: {args['exp_folder']}")
+    print(args)
+
+    '''
+
+    
+
     saver = Saver(output_folder=output_root,
             experiment_name=args['experiment_name'],
             wandb_mode=args['wandb_mode'],
@@ -35,4 +43,4 @@ if __name__ == '__main__':
     saver.log_hparams(args)
     cmd = "python " + " ".join(sys.argv)
     saver.log_cmd(cmd)
-    print(args)
+    print(args)'''

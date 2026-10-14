@@ -398,17 +398,14 @@ if __name__ == '__main__':
     # 11) EVALUATION
     # ============================================================
     parser.add_argument('--best_metric', type=str, default='dice_f', choices=['dice_f', 'dice_t', 'IoU'], help='Best metric')
-
-    # ============================================================
-    # Parse args, seed, and set up experiment
-    # ============================================================
     args = vars(parser.parse_args())
+    
     set_seed(args['seed'])
 
-    # Experiment name and folder
     args['experiment_name'] = args['exp_name']
     output_root = 'results'
     args['exp_folder'] = os.path.join(output_root, args['experiment_name'])
+    print(f"[INFO] Experiment output directory: {args['exp_folder']}")
 
     # Create Saver (creates timestamped folder, initializes WandB)
     saver = Saver(

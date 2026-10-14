@@ -71,44 +71,26 @@ class Saver:
         args : dict
             Full argument dictionary (logged as WandB config and saved to disk).
         """
-        print("\n" + "=" * 72)
-        print("                  EXPERIMENT LOGGER INITIALIZATION")
-        print("=" * 72)
-
-        print(f"[INFO] Experiment name       : {experiment_name}")
-        print(f"[INFO] Output directory      : {output_folder}")
-        print(f"[INFO] WandB mode            : {wandb_mode}")
-        print(f"[INFO] WandB project         : {wandb_project}")
-        print(f"[INFO] Configuration entries : {len(args)}")
         # ------------------------------------------------------------
         # 1) Create timestamped experiment folder
         # ------------------------------------------------------------
         timestamp_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         self.path = os.path.join(output_folder, f'{timestamp_str}_{experiment_name}')
         os.makedirs(self.path, exist_ok=True)
-        print("-" * 72)
-        print("[INFO] Experiment directory created.")
-        print(f"[Saver] Results will be saved to: {self.path}")
+        print(f"[INFO] Experiment directory created: {self.path}")
 
         # ------------------------------------------------------------
         # 2) TensorBoard writer
         # ------------------------------------------------------------
-        print("-" * 72)
-        print("[INFO] Initializing TensorBoard...")
         self.writer = SummaryWriter(str(self.path), flush_secs=30)
-        print("[INFO] TensorBoard initialized successfully.")
-        print(f"[INFO] TensorBoard log path   : {self.path}")
+        print(f"[INFO] TensorBoard logging initialized: {self.path}")
 
         # ------------------------------------------------------------
         # 3) CSV metrics log (with header for easy pandas reading)
         # ------------------------------------------------------------
         self.csv_file = os.path.join(self.path, 'metrics.csv')
-        with open(self.csv_file, 'w', encoding='UTF8', newline='') as f:
-            csv.writer(f).writerow(['metric', 'epoch', 'value'])
-        print("-" * 72)
-        print("[INFO] Metrics CSV created.")
-        print(f"[INFO] CSV path               : {self.csv_file}")
-        print("[INFO] CSV columns            : metric, epoch, value")    
+        with open(self.csv_file, 'w', encoding='UTF8', newline='') as f: csv.writer(f).writerow(['metric', 'epoch', 'value'])
+        print(f"[INFO] Metrics CSV initialized: {self.csv_file}")       
 
         # ------------------------------------------------------------
         # 4) Sub-folders for checkpoints and visualizations
@@ -117,10 +99,7 @@ class Saver:
         self.vis_path  = os.path.join(self.path, 'vis')
         os.makedirs(self.ckpt_path, exist_ok=True)
         os.makedirs(self.vis_path,  exist_ok=True)
-        print("-" * 72)
-        print("[INFO] Output subdirectories initialized.")
-        print(f"[INFO] Checkpoint directory   : {self.ckpt_path}")
-        print(f"[INFO] Visualization directory: {self.vis_path}")
+        print(f"[INFO] Checkpoint and visualization directories initialized: {self.path}")
 
         # ------------------------------------------------------------
         # 5) WandB metrics table buffers
@@ -128,49 +107,19 @@ class Saver:
         self.metrics_table: wandb.Table | None = None
         self.columns: list[str] | None = None
         self.rows: list[list] = []
-        print("-" * 72)
-        print("[INFO] WandB metrics table buffers initialized.")
-        print("[INFO] Initial table state    : Empty")
 
         # ------------------------------------------------------------
         # 6) Initialize WandB (safely — never crash the training run)
         # ------------------------------------------------------------
         self.wandb_enabled = False
-        print("-" * 72)
-        print("[INFO] Initializing Weights & Biases...")
         try:
-            wandb.init(
-                project=wandb_project,
-                entity=wandb_entity,
-                mode=wandb_mode,
-                tags=args.get('wandb_tags', []),
-                name=experiment_name,
-                config=args,
-                reinit=True,
-            )
+            wandb.init(project=wandb_project, entity=wandb_entity, mode=wandb_mode, tags=args.get('wandb_tags', []), name=experiment_name, config=args, reinit=True)
             self.wandb_enabled = (wandb_mode != 'disabled') and (wandb.run is not None)
-
-            if self.wandb_enabled:
-                print("[INFO] WandB initialized successfully.")
-                print(f"[INFO] WandB run name        : {wandb.run.name}")
-                print(f"[INFO] WandB run ID          : {wandb.run.id}")
-                print(f"[INFO] WandB project URL     : {wandb.run.url}")
-
-            else:
-                 print("[INFO] WandB logging is disabled or no active run exists.")
+            print(f"[INFO] Weights & Biases: {'enabled' if self.wandb_enabled else 'disabled'}")
 
         except Exception as e:
-            print(f"[WARNING] WandB initialization failed: {type(e).__name__}: {e}")
-            print("[WARNING] Continuing without WandB.")
-            self.wandb_enabled = False 
-
-        print("=" * 72)
-        print("[INFO] Saver initialization completed.")
-        print(f"[INFO] Local logging          : Enabled")
-        print(f"[INFO] TensorBoard            : Enabled")
-        print(f"[INFO] CSV logging            : Enabled")
-        print(f"[INFO] WandB logging          : {self.wandb_enabled}")
-    print("=" * 72 + "\n")      
+            self.wandb_enabled = False
+            print(f"[WARNING] Weights & Biases initialization failed: {e}")       
 
     def save_model(self, net: nn.Module, name: str, step: int) -> None:
         """
@@ -427,17 +376,7 @@ class Saver:
         str
             Full path to the saved ``hparams.json`` file.
         """
-        print("\n" + "-" * 68)
-        print("                 HYPERPARAMETER LOGGING")
-        print("-" * 68)
-
-        print(f"[INFO] Number of hyperparameters : {len(params_dict)}")
-        print(f"[INFO] Experiment directory      : {self.path}")
-        print(f"[INFO] WandB enabled             : {self.wandb_enabled}")
-
         # 1) TensorBoard — write as pretty JSON text
-        print("-" * 68)
-        print("[INFO] Preparing hyperparameter configuration...")
         hparams_str = json.dumps(params_dict, indent=2, default=str)
         print("[INFO] Hyperparameters serialized successfully.")
 
