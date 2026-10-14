@@ -370,9 +370,9 @@ if __name__ == '__main__':
     # 7) SAM
     # ============================================================
     parser.add_argument('--use_sam', type=str2bool, default=True, help='Use SAM (phase 1) vs aggregator only (phase 2)')
-    parser.add_argument('--use_standard_net', type=str2bool, default=False, help='Use standard segmentor (phase 2) vs prompt learner (phase 1)')
     parser.add_argument('--sam_ckpt', type=str, default='sam_vit_b', choices = ['sam_vit_b', 'medsam_vit_b', 'sam_vit_h'], help='SAM checkpoint')
     parser.add_argument('--sam_version', type=str, default='vit_b', choices = ['vit_b', 'vit_h'], help='SAM version')
+    parser.add_argument('--use_standard_net', type=str2bool, default=False, help='Use standard segmentor (phase 2) vs prompt learner (phase 1)')
     parser.add_argument('--sam_zeroshot', type=str2bool, default=False, help='SAM zero shot')
     # ============================================================
     # 8) DEVICE / PERFORMANCE
@@ -420,16 +420,14 @@ if __name__ == '__main__':
     cmd = "python " + " ".join(sys.argv)
     saver.log_cmd(cmd)
 
-    # Register paths for training / inference
-    args['path']       = os.path.join(saver.path, 'net_last.pth')
-    args['path_best']  = os.path.join(saver.path, 'net_best.pth')
+    args['path'] = os.path.join(saver.path, 'net_last.pth')
+    args['path_best'] = os.path.join(saver.path, 'net_best.pth')
     args['vis_folder'] = os.path.join(saver.path, 'vis')
 
-    # ============================================================
-    # SAM arguments
-    # ============================================================
+
     if args['use_sam']:
         sam_ckpt = os.path.join('cp', f"{args['sam_ckpt']}.pth")
+        print(f"[INFO] SAM checkpoint path: {sam_ckpt}")
 
         if not os.path.exists(sam_ckpt):
             raise FileNotFoundError(

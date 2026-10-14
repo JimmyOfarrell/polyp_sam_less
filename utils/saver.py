@@ -443,13 +443,13 @@ class Saver:
         """
         # 1) TensorBoard — fixed tag for comparability across runs
         self.writer.add_text('cmd', cmd, 0)
+        print("[INFO] Command saved to TensorBoard.")
 
         # 2) JSON file
         out_path = os.path.join(self.path, 'cmd.json')
-        with open(out_path, 'w', encoding='utf-8') as fp:
-            json.dump({'cmd': cmd}, fp, indent=2, ensure_ascii=False)
+        with open(out_path, 'w', encoding='utf-8') as fp: json.dump({'cmd': cmd}, fp, indent=2, ensure_ascii=False)
+        print(f"[INFO] Command saved: {out_path}")
 
-        print(f"[Saver] Saved command: {out_path}")
         return out_path
      
     def wb_mask(self, img, mask, gt):
