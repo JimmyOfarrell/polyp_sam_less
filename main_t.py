@@ -36,6 +36,8 @@ if __name__ == '__main__':
                   wandb_entity=args['wandb_entity'],
                   args=args)
     saver.log_hparams(args)
+    cmd = "python " + " ".join(sys.argv)
+    print(cmd)
     
     '''
 

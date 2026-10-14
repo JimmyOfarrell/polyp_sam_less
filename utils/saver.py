@@ -380,7 +380,6 @@ class Saver:
         # 1) TensorBoard — write as pretty JSON text
         hparams_str = json.dumps(params_dict, indent=2, default=str)
 
-        print("[INFO] Logging hyperparameters to TensorBoard...")
         try:
             self.writer.add_text("hparams", hparams_str, 0)
             print("[INFO] TensorBoard hyperparameters logged successfully.")
