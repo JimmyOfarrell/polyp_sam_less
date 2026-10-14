@@ -399,7 +399,7 @@ if __name__ == '__main__':
     # ============================================================
     parser.add_argument('--best_metric', type=str, default='dice_f', choices=['dice_f', 'dice_t', 'IoU'], help='Best metric')
     args = vars(parser.parse_args())
-    
+
     set_seed(args['seed'])
 
     args['experiment_name'] = args['exp_name']
@@ -407,7 +407,7 @@ if __name__ == '__main__':
     args['exp_folder'] = os.path.join(output_root, args['experiment_name'])
     print(f"[INFO] Experiment output directory: {args['exp_folder']}")
 
-    # Create Saver (creates timestamped folder, initializes WandB)
+    
     saver = Saver(
         output_folder=output_root,
         experiment_name=args['experiment_name'],

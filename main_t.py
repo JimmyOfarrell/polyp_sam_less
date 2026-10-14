@@ -28,19 +28,21 @@ if __name__ == '__main__':
     output_root = 'results'
     args['exp_folder'] = os.path.join(output_root, args['experiment_name'])
     print(f"[INFO] Experiment output directory: {args['exp_folder']}")
-    print(args)
 
+    saver = Saver(output_folder=output_root,
+                  experiment_name=args['experiment_name'],
+                  wandb_mode=args['wandb_mode'],
+                  wandb_project=args['wandb_project'],
+                  wandb_entity=args['wandb_entity'],
+                  args=args)
+    saver.log_hparams(args)
+    
     '''
 
     
 
-    saver = Saver(output_folder=output_root,
-            experiment_name=args['experiment_name'],
-            wandb_mode=args['wandb_mode'],
-            wandb_project=args['wandb_project'],
-            wandb_entity=args['wandb_entity'],
-            args=args)
-    saver.log_hparams(args)
+    
+    
     cmd = "python " + " ".join(sys.argv)
     saver.log_cmd(cmd)
     print(args)'''

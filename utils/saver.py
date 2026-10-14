@@ -99,7 +99,8 @@ class Saver:
         self.vis_path  = os.path.join(self.path, 'vis')
         os.makedirs(self.ckpt_path, exist_ok=True)
         os.makedirs(self.vis_path,  exist_ok=True)
-        print(f"[INFO] Checkpoint and visualization directories initialized: {self.path}")
+        print(f"[INFO] Checkpoint directory initialized: {self.ckpt_path}")
+        print(f"[INFO] Visualization directory initialized: {self.vis_path}")
 
         # ------------------------------------------------------------
         # 5) WandB metrics table buffers
@@ -378,11 +379,8 @@ class Saver:
         """
         # 1) TensorBoard — write as pretty JSON text
         hparams_str = json.dumps(params_dict, indent=2, default=str)
-        print("[INFO] Hyperparameters serialized successfully.")
 
-        print("-" * 68)
         print("[INFO] Logging hyperparameters to TensorBoard...")
-
         try:
             self.writer.add_text("hparams", hparams_str, 0)
             print("[INFO] TensorBoard hyperparameters logged successfully.")
@@ -396,9 +394,7 @@ class Saver:
         # 2) WandB — update run config (skip if disabled)
         #    Note: If wandb.init(config=args) was already called, this
         #    update is redundant but harmless.
-        print("-" * 68)
         if self.wandb_enabled:
-            print("[INFO] Updating WandB configuration...")
             try:
                 wandb.config.update(params_dict, allow_val_change=True)
                 print("[INFO] WandB configuration updated successfully.")
@@ -412,28 +408,19 @@ class Saver:
         else: print("[INFO] WandB is disabled; skipping configuration update.")        
 
         # 3) JSON file
-        print("-" * 68)
         out_path = os.path.join(self.path, 'hparams.json')
-        print("[INFO] Saving hyperparameters to JSON...")
-        print(f"[INFO] JSON output path          : {out_path}")
+        print(f"[INFO] JSON output path: {out_path}")
 
         try:
-            with open(out_path, 'w', encoding='utf-8') as fp:
-                json.dump(params_dict, fp, indent=2, default=str, ensure_ascii=False)
-
-            file_size = os.path.getsize(out_path)
+            with open(out_path, 'w', encoding='utf-8') as fp: json.dump(params_dict, fp, indent=2, default=str, ensure_ascii=False)
             print("[INFO] Hyperparameters saved successfully.")
-            print(f"[INFO] File size                 : {file_size:,} bytes")
 
         except Exception as e:
             print(
                 f"[ERROR] Failed to save hparams.json: "
                 f"{type(e).__name__}: {e}")
             raise
-        print("-" * 68)
-        print("[INFO] Hyperparameter logging completed.")
-        print(f"[INFO] Saved configuration      : {out_path}")
-        print("=" * 68 + "\n")
+        
         return out_path
 
     def log_cmd(self, cmd: str) -> str:
