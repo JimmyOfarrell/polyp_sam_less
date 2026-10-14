@@ -58,6 +58,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
     train_dataloader, val_dataloader = get_train_val_dataloaders(args, img_dim)
     print(f"[INFO] Data loaders initialized | Train batches: {len(train_dataloader)} | Validation batches: {len(val_dataloader)}")
 if __name__ == '__main__':
+    PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description="""
     ============================================================
                 POLYP SEGMENTATION FRAMEWORK
@@ -81,7 +82,7 @@ if __name__ == '__main__':
     parser.add_argument('--device', default='cuda', help="Device: 'cuda' or 'cpu'", required=False)
     parser.add_argument('-Idim', '--Idim', type=int, default=512, help='Input image size', required=False)
     parser.add_argument('-bs', '--Batch_size', default=2, help='Batch size', required=False)
-    parser.add_argument('--split_path', type=str, default='data/split.json', help='Path to the JSON split file')
+    parser.add_argument('--split_path', type=str, default=os.path.join(PROJECT_DIR, 'data', 'split.json'), help='Path to the JSON split file')
     parser.add_argument('--n_fold', type=int, default=0, help='Fold index')
     parser.add_argument('--cache_rate', type=float, default=0.0, help='Dataset cache rate (0.0 to 1.0)')
     parser.add_argument('--image_key', type=str, default='image',help='Key for image in the data dict')

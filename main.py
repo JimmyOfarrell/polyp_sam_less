@@ -69,7 +69,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
 
         # img_dim = 1024 for SAM ViT-B
         img_dim = sam.image_encoder.img_size
-        
+
     else:
         sam = None
         img_dim = int(args['Idim'])
@@ -285,6 +285,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
     except Exception as e: print(f"[WARNING] Failed to close {path_best}: {e}")
 
 if __name__ == '__main__':
+    PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description="""
     ============================================================
                 POLYP SEGMENTATION FRAMEWORK
@@ -302,8 +303,8 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', required=True, help='Experiment name (required)')
     parser.add_argument('-task', '--task', default='polyp', help='Task type: polyp | mslesseg | pancreas | ...', required=False)
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--split_path', type=str, default='data/split.json', help='Path to the JSON split file')
-    parser.add_argument('--data_dir', type=str, default='/data', help='Path to the dataset directory', required=False)
+    parser.add_argument('--split_path', type=str, default=os.path.join(PROJECT_DIR, 'data', 'split.json'), help='Path to the JSON split file')
+    parser.add_argument('--data_dir', type=str, default=os.path.join(PROJECT_DIR, 'data'), help='Path to the dataset directory', required=False)
     # ============================================================
     # 2) IMAGE / TASK SPECIFICATION
     # ============================================================
