@@ -426,7 +426,8 @@ if __name__ == '__main__':
 
 
     if args['use_sam']:
-        sam_ckpt = os.path.join('cp', f"{args['sam_ckpt']}.pth")
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        sam_ckpt = os.path.join(project_dir, 'cp', f"{args['sam_ckpt']}.pth")
         print(f"[INFO] SAM checkpoint path: {sam_ckpt}")
 
         if not os.path.exists(sam_ckpt):
