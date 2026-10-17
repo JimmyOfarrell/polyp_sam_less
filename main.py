@@ -6,7 +6,7 @@ import argparse
 import torch.optim as optim
 from utils.saver import Saver
 from inference import inference_ds_monai
-from train import train_single_epoch, train_single_epoch_monai
+from train import train_single_epoch, train_single_epoch
 from utils.model_utils import get_model, get_standard_model
 from utils.dataset_utils import get_train_val_dataloaders
 from segment_anything import sam_model_registry
@@ -105,7 +105,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
     #                (polyp uses batch_size=1 in val/test → destroys output).
     #   - If False : keep default running stats (standard, safe for polyp).
     # ============================================================
-    if args['disable_batchnorm_running_stats']: disable_batchnorm_running_stats(model)
+    if args['disable_batchnorm_running_stats']: replace_batchnorm_with_instance_norm(model)
     
     # ============================================================
     # Determine which parameters to optimize
@@ -117,26 +117,24 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
     # ============================================================
     if not args['use_sam']:
         if not args['segmentor_finetune_backbone']:
-            # Freeze everything, unfreeze only the aggregator
             for param in model.parameters(): param.requires_grad = False
             for param in model.segmentor.parameters(): param.requires_grad = True
             params_to_optimize = list(model.segmentor.parameters())
             print(f"[INFO] Phase 2a: optimizing only the aggregator "
                   f"({len(params_to_optimize)} tensors)")
         else:
-            # Fine-tune everything
             for param in model.parameters(): param.requires_grad = True
             params_to_optimize = list(model.parameters())
             print(f"[INFO] Phase 2b: fine-tuning all parameters "
                   f"({len(params_to_optimize)} tensors)")
     else:
-        # Phase 1: optimize all ModelEmb parameters
+        for param in model.parameters(): param.requires_grad = True
         params_to_optimize = list(model.parameters())
         print(f"[INFO] Phase 1: optimizing prompt learner "
               f"({len(params_to_optimize)} tensors)")
     # Summary
     total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    trainable_params = sum(p.numel() for p in params_to_optimize)
     trainable_pct = 100.0 * trainable_params / max(total_params, 1)
 
     print(f"[INFO] Total parameters    : {total_params:,} ({total_params / 1e6:.2f}M)")
@@ -188,7 +186,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
 
         elif sched_type == 'CosineAnnealingLR':
             T_max = int(args['schedCos_Tmax'])
-            # sanity: T_max=10 default is too small for polyp
+        
             if T_max <= 10: T_max = int(args['epoches'])
             scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=float(args['schedCos_eta_min']), last_epoch=int(args['schedCos_last_epoch']))            
 
@@ -219,7 +217,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
     best = 0
     path_best = os.path.join(saver.path, 'best.csv')
     f_best = open(path_best, 'w', encoding='utf-8')
-    f_best.write('epoch,best_metric\n')
+    f_best.write(f'epoch,{args['best_metric']}\n')
     f_best.flush()
     print(f"[INFO] Tracking best model in: {path_best}")
 
@@ -241,7 +239,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
         # Select training function based on task.
         # MONAI-based tasks include polyp (dict-based DataLoader).
         if args['task'] in ['polyp']:
-            avg_loss, avg_dice, avg_iou= train_single_epoch_monai(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, epoch, args, saver, scheduler, scaler)
+            avg_loss, avg_dice, avg_iou= train_single_epoch(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, epoch, args, saver, scheduler, scaler)
         else:
             # Legacy tuple-based training (not compatible with polyp)
             avg_loss= train_single_epoch(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, epoch, args)

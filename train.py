@@ -10,62 +10,19 @@ from monai.metrics import DiceMetric, MeanIoU
 from monai.transforms import AsDiscrete, Activations
 from utils.utils import norm_batch, gen_step, get_input_dict
 
+def train_single_epoch(train_data_loader, model, sam, optimizer, epoch, args, saver, scheduler=None, scaler=None):
 
-
-def train_single_epoch(ds, model, sam, optimizer, epoch, args):
-    loss_list = []
-    pbar = tqdm(ds)
-    criterion = nn.BCELoss()
-    Idim = int(args['Idim'])
-    optimizer.zero_grad()
-    for ix, (imgs, gts, original_sz, img_sz) in enumerate(pbar):
-        orig_imgs = imgs.to(sam.device)
-        gts = gts.to(sam.device)
-        orig_imgs_small = F.interpolate(orig_imgs, (Idim, Idim), mode='bilinear', align_corners=True)
-        dense_embeddings = model(orig_imgs_small)
-        batched_input = get_input_dict(orig_imgs, original_sz, img_sz)
-        masks = norm_batch(sam_call(batched_input, sam, dense_embeddings))
-        loss = gen_step(optimizer, gts, masks, criterion, accumulation_steps=4, step=ix)
-        loss_list.append(loss)
-        pbar.set_description(
-            '(train | {}) epoch {epoch} ::'
-            ' loss {loss:.4f}'.format(
-                'Medical',
-                epoch=epoch,
-                loss=np.mean(loss_list)
-            ))
-    return np.mean(loss_list)
-
-def train_single_epoch_monai(ds, model, sam, optimizer, epoch, args, saver, scheduler=None, scaler=None):
-    # ============================================================
-    # Transforms for post-processing (metrics and visualization)
-    #   - one_hot    : (B, 1, H, W) binary  → (B, 2, H, W) one-hot
-    #   - post_trans : probabilities [0, 1] → binary {0, 1} (threshold=0.5)
-    #   - sigmoid    : only used for 2-channel outputs (MS-style)
-    #                  For polyp (out_channels=1) it is unused.
-    # ============================================================
     one_hot = AsDiscrete(to_onehot=2, dim=1)
     post_trans = AsDiscrete(threshold=args['theashold_discretize'])
     sigmoid = Activations(sigmoid=True)
 
-    # ============================================================
-    # Metrics (foreground-only for polyp)
-    #   - include_background=False: Dice/IoU computed ONLY on polyp,
-    #     not averaged with the (very easy) background class.
-    #   - Cumulative: reset() must be called after each batch.
-    # ============================================================
     diceMetric = DiceMetric(include_background=args['include_background'], reduction='mean')
     iouMetric = MeanIoU(include_background=args['include_background'], reduction='mean')
     
-    # ============================================================
-    # Per-epoch accumulators and progress bar
-    #   - lists store per-batch metrics; averaged at the end of epoch
-    #   - pbar wraps the DataLoader for live progress display
-    # ============================================================
-    iou_list: list = []
-    dice_list: list = []
-    loss_list: list = []
-    pbar = tqdm(ds)
+    iou_list = []
+    dice_list = []
+    loss_list = []
+    pbar = tqdm(train_data_loader)
 
     # ============================================================
     # Determine if the loss should apply sigmoid internally.

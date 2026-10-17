@@ -605,59 +605,36 @@ def str2bool(v: Union[bool, int, str]) -> bool:
     )
 
 
-# ===========================================================================
-# Model preparation
-# ===========================================================================
+def replace_batchnorm_with_instance_norm(model):
 
-def disable_batchnorm_running_stats(model: nn.Module) -> nn.Module:
-    """
-    Disable running statistics for all BatchNorm layers in the model.
+    def _replace(m):
+        if isinstance(m, _BatchNorm):
+            return nn.InstanceNorm2d(
+                num_features=m.num_features,
+                eps=m.eps,
+                momentum=m.momentum if m.momentum is not None else 0.1,
+                affine=True,
+                track_running_stats=False,
+            )
+        return m
 
-    Uses `torch.func.replace_all_batch_norm_modules_` (PyTorch >= 2.0)
-    to update every BatchNorm layer in-place consistently:
-        - track_running_stats is set to False
-        - running_mean, running_var, and num_batches_tracked are removed
-          from the state_dict
-        - the internal state remains consistent across reloads
+    def _walk(module, prefix=""):
+        for name, child in list(module.named_children()):
+            full_name = f"{prefix}.{name}" if prefix else name
+            if isinstance(child, _BatchNorm):
+                new_layer = _replace(child)
+                setattr(module, name, new_layer)
+                print(f"[disable_bn] replaced {full_name}: "
+                      f"{type(child).__name__} → {type(new_layer).__name__}")
+            elif len(list(child.children())) > 0:
+                _walk(child, full_name)
 
-    The counting uses `_BatchNorm` to cover all derived classes
-    (BatchNorm1d/2d/3d, SyncBatchNorm, and any future subclasses).
+    n_bn_before = sum(1 for m in model.modules() if isinstance(m, _BatchNorm))
+    _walk(model)
+    n_bn_after = sum(1 for m in model.modules() if isinstance(m, _BatchNorm))
+    n_in_after = sum(1 for m in model.modules() if isinstance(m, nn.InstanceNorm2d))
 
-    WARNING
-    -------
-    After calling this function, BatchNorm layers in eval mode will use
-    the statistics of the current input batch (per-forward-pass) instead
-    of running averages. This means:
-
-        - For polyp segmentation where validation and testing use
-          batch_size=1, the batch statistics become highly unstable,
-          producing near-zero or erratic outputs. Dice/IoU metrics
-          become meaningless.
-        - Even with batch_size >= 2, the val/test distribution may
-          differ from train, making this feature risky for medical
-          imaging.
-
-    For polyp segmentation, do NOT enable this feature (keep
-    `args['disable_batchnorm_running_stats'] = False`).
-
-    Parameters
-    ----------
-    model : nn.Module
-        The model whose BatchNorm layers will be modified in-place.
-
-    Returns
-    -------
-    nn.Module
-        The same model, modified in-place.
-    """
-    from torch.func import replace_all_batch_norm_modules_
-
-    replace_all_batch_norm_modules_(model)
-
-    count = sum(1 for m in model.modules() if isinstance(m, _BatchNorm))
-    print(
-        f"[INFO] disable_batchnorm_running_stats: "
-        f"updated {count} BatchNorm layer(s) to track_running_stats=False."
-    )
-
+    print(f"[disable_bn] {n_bn_before} BatchNorm layer(s) → "
+          f"{n_in_after} InstanceNorm2d layer(s) "
+          f"(remaining BatchNorm: {n_bn_after})")
     return model

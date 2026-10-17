@@ -2,11 +2,15 @@ import torch
 import argparse
 import os
 import sys
+import torch.optim as optim
+import wandb
 from segment_anything import sam_model_registry
 from segment_anything.utils.transforms import ResizeLongestSide
 from utils.dataset_utils import get_train_val_dataloaders
 from utils.model_utils import get_model, get_standard_model
-from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
+from utils.utils import replace_batchnorm_with_instance_norm, str2bool, set_seed
+from utils.scheduler import WarmupCosineSchedule, WarmupLinearSchedule
+from train import train_single_epoch
 from utils.saver import Saver
 
 def main(args=None, sam_args=None, saver=None):
@@ -67,6 +71,97 @@ def main(args=None, sam_args=None, saver=None):
     model = model.to(args['device'])
     print(f"[INFO] Model moved to {args['device']}")    
 
+    if args['disable_batchnorm_running_stats']: replace_batchnorm_with_instance_norm(model)
+
+    if not args['use_sam']:
+        if not args['segmentor_finetune_backbone']:
+            for param in model.parameters(): param.requires_grad = False
+            for param in model.segmentor.parameters(): param.requires_grad = True
+            params_to_optimize = list(model.segmentor.parameters())
+            print(f"[INFO] Phase 2a: optimizing only the aggregator "
+                    f"({len(params_to_optimize)} tensors)")
+        else:
+            for param in model.parameters(): param.requires_grad = True
+            params_to_optimize = list(model.parameters())
+            print(f"[INFO] Phase 2b: fine-tuning all parameters "
+                    f"({len(params_to_optimize)} tensors)")
+    else:
+        for param in model.parameters(): param.requires_grad = True
+        params_to_optimize = list(model.parameters())
+        print(f"[INFO] Phase 1: optimizing prompt learner "
+                f"({len(params_to_optimize)} tensors)")
+
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in params_to_optimize)
+    trainable_pct = 100.0 * trainable_params / max(total_params, 1)
+    print(f"[INFO] Total parameters    : {total_params:,} ({total_params / 1e6:.2f}M)")
+    print(f"[INFO] Trainable parameters: {trainable_params:,} "
+            f"({trainable_params / 1e6:.2f}M, {trainable_pct:.2f}%)") 
+
+    lr, wd = float(args['learning_rate']), float(args['WD'])
+    if args['optim'] == 'Adam':optimizer = optim.Adam(params_to_optimize, lr=lr, weight_decay=wd)
+    elif args['optim'] == 'SGD':optimizer = optim.SGD(params_to_optimize, lr=lr, weight_decay=wd, momentum=float(args['momentum']))
+    elif args['optim'] == 'AdamW':optimizer = optim.AdamW(params_to_optimize, lr=lr, weight_decay=wd)
+    else: raise ValueError(f"Unknown optimizer: {args['optim']}")
+
+    n_params = sum(p.numel() for p in params_to_optimize)
+    print(f"[INFO] Optimizer: {type(optimizer).__name__}, "
+            f"lr={lr}, wd={wd}, params={n_params:,}")
+
+    if args['use_scheduler']:
+        steps_per_epoch = len(train_dataloader)
+        sched_type = args['scheduler']
+        gamma = float(args['scheduler_gamma'])
+        if sched_type == 'StepLR':
+            step_size = steps_per_epoch * int(args['scheduler_step'])
+            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+        elif sched_type == 'MultiStepLR':
+            n_epochs = int(args['epoches'])
+            milestones = [int(n_epochs * 0.3) * steps_per_epoch, int(n_epochs * 0.6) * steps_per_epoch, int(n_epochs * 0.9) * steps_per_epoch]
+            scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
+        elif sched_type == 'ExponentialLR': scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+        elif sched_type == 'ReduceLROnPlateau': scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=gamma, patience=int(args['scheduler_patience']))    
+        elif sched_type == 'CosineAnnealingLR':
+            T_max = int(args['schedCos_Tmax'])
+            if T_max <= 10: T_max = int(args['epoches'])
+            T_max = T_max * steps_per_epoch
+            scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=float(args['schedCos_eta_min']), last_epoch=int(args['schedCos_last_epoch']))            
+        elif sched_type == 'WarmupCosineSchedule':
+            warmup_epochs = int(args['warmup_epochs'])
+            scheduler = WarmupCosineSchedule(optimizer, warmup_steps=steps_per_epoch * warmup_epochs, t_total=steps_per_epoch * int(args['epoches']), cycles=float(args['warmup_cycles']), last_epoch=int(args['schedWarmupCos_last_epoch']))
+        elif sched_type == 'WarmupLinearSchedule':
+            warmup_epochs = int(args['warmup_epochs'])
+            scheduler = WarmupLinearSchedule(optimizer, warmup_steps=steps_per_epoch * warmup_epochs, t_total=steps_per_epoch * int(args['epoches']))
+        else: raise ValueError(f"Unknown scheduler: {sched_type}")    
+        print(f"[INFO] Scheduler: {sched_type} "
+              f"(steps_per_epoch={steps_per_epoch})")
+    else:
+        scheduler = None
+        print(f"[INFO] Scheduler: None (constant LR)")
+
+    if args['wandb_watch']: wandb.watch(model, log='all', log_freq=args['wandb_watch_freq'], log_graph=True)
+
+    best = 0
+    path_best = os.path.join(saver.path, 'best.csv')
+    f_best = open(path_best, 'w', encoding='utf-8')
+    f_best.write(f'epoch,{args['best_metric']}\n')
+    f_best.flush()
+    print(f"[INFO] Tracking best model by '{args['best_metric']}' in: {path_best}")
+
+    cuda_available = torch.cuda.is_available()
+    use_amp = bool(args['use_cuda_amp']) and cuda_available
+    args['use_amp_resolved'] = use_amp
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+    print(f"[INFO] AMP enabled: {use_amp} (requested={args['use_cuda_amp']}, "
+          f"cuda_available={cuda_available})")
+
+    for epoch in range(int(args['epoches'])):
+        avg_loss, avg_dice, avg_iou= train_single_epoch(train_dataloader, model.train(), sam.eval() if args['use_sam'] else None, optimizer, epoch, args, saver, scheduler, scaler)
+        saver.log_loss('train_loss', avg_loss, epoch)
+        saver.log_loss('train_dice', avg_dice, epoch)
+        saver.log_loss('train_iou', avg_iou, epoch)
+
+
 if __name__ == '__main__':
     PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description="""
@@ -110,6 +205,29 @@ Output : Binary Polyp Segmentation Masks
     parser.add_argument('--net_segmentor', type=str, default='PointwiseConv', choices=['PointwiseConv', 'ConvUpsample', 'TransposeConvUpsample', 'UnetLike'], help='Aggregator head')
     parser.add_argument('--segmentor_finetune_backbone', type=str2bool, default=False, help='If we want to train the miniSegmentor finetuning also the backbone')
     parser.add_argument('--upsample_factor_list', type=int, nargs='+', default=[2, 2], help='Upsample factors for ConvUpsample aggregator')
+    parser.add_argument('--disable_batchnorm_running_stats', type=str2bool, default=False, help='Disable batchnorm running stats')
+    parser.add_argument('-lr', '--learning_rate', default=1e-4, help='Learning rate')
+    parser.add_argument('-WD', '--WD', default=1e-4, help='Weight decay')
+    parser.add_argument('--optim', type=str, default='AdamW', choices=['Adam', 'SGD', 'AdamW'], help='Optimizer')
+    parser.add_argument('--momentum', type=float, default=0, help='Momentum (only used with SGD)')
+    parser.add_argument('--use_scheduler', type=str2bool, default=False, help='Enable LR scheduler')
+    parser.add_argument('--scheduler', type=str, default='StepLR', choices=['StepLR', 'MultiStepLR', 'ExponentialLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'WarmupCosineSchedule', 'WarmupLinearSchedule'], help='Scheduler type')
+    parser.add_argument('--scheduler_gamma', type=float, default=0.1, help='Gamma (LR decay factor)')
+    parser.add_argument('--scheduler_step', type=int, default=100, help='Scheduler step for StepLR, and first step of MultiStepLR')
+    parser.add_argument('-epoches', '--epoches', type=int, default=150, help='Number of training epochs')
+    parser.add_argument('--scheduler_patience', type=int, default=10, help='Patience for ReduceLROnPlateau')
+    parser.add_argument('--schedCos_Tmax', type=int, default=10, help='T_max for CosineAnnealingLR')
+    parser.add_argument('--schedCos_eta_min', type=float, default=0.0001, help='eta_min for CosineAnnealingLR')
+    parser.add_argument('--schedCos_last_epoch', type=int, default=-1, help='last_epoch for CosineAnnealingLR')
+    parser.add_argument('--warmup_epochs', type=int, default=5, help='Warmup epochs')
+    parser.add_argument('--warmup_cycles', type=float, default=0.5, help='Warmup cycles')
+    parser.add_argument('--schedWarmupCos_last_epoch', type=int, default=-1, help='WarmupCosineSchedule last_epoch (use only if you are resuming a training)')
+    parser.add_argument('--wandb_watch', type=str2bool, default=False, help='Enable WandB watch')
+    parser.add_argument('--wandb_watch_freq', type=int, default=10, help='Wandb watch frequency')
+    parser.add_argument('--best_metric', type=str, default='dice_f', choices=['dice_f', 'dice_t', 'IoU'], help='Best metric')
+    parser.add_argument('--use_cuda_amp', type=str2bool, default=True, help='Use mixed precision training')
+    parser.add_argument('--include_background', type=str2bool, default=False, help='Include background class in loss')
+    parser.add_argument('--theashold_discretize', type=float, default=0.5, help='Threshold for binarization')
     args = vars(parser.parse_args())
 
     set_seed(args['seed'])
