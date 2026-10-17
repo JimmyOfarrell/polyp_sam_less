@@ -9,8 +9,8 @@ from inference import inference_ds_monai
 from train import train_single_epoch, train_single_epoch_monai
 from utils.model_utils import get_model, get_standard_model
 from utils.dataset_utils import get_train_val_dataloaders
-from segment_anything.utils.transforms import ResizeLongestSide
 from segment_anything import sam_model_registry
+from segment_anything.utils.transforms import ResizeLongestSide
 from utils.utils import str2bool, set_seed, disable_batchnorm_running_stats
 from utils.scheduler import WarmupCosineSchedule, WarmupLinearSchedule
 
@@ -36,10 +36,10 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
             torch.cuda.set_device(args['device'])
 
             print(f"[INFO] Using device: {args['device']} "
-                f"({torch.cuda.get_device_name(args['device'])})")
+                  f"({torch.cuda.get_device_name(args['device'])})")
         else:
             print(f"[WARNING] '{requested}' requested but CUDA not available. "
-                f"Falling back to CPU.")
+                  f"Falling back to CPU.")
             args['device'] = torch.device('cpu')
             print(f"[INFO] Using device: {args['device']}")
     else:
@@ -48,15 +48,13 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
         args['device'] = torch.device('cpu')
         print(f"[INFO] Using device: {args['device']}")            
 
-    
     # ============================================================
     # SAM setup
     # ============================================================
     if args['use_sam']:
-        # Load SAM from checkpoint
+        print(f"[INFO] Loading SAM model: {sam_args['model_type']}")
         try:
             sam = sam_model_registry[sam_args['model_type']](checkpoint=sam_args['sam_checkpoint'])
-            print(f"[INFO] Loading SAM model: {sam_args['model_type']}")
         except Exception as e:
             raise RuntimeError(
             f"Failed to load SAM '{sam_args['model_type']}' from "
@@ -65,14 +63,16 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
 
         sam.to(device=args['device'])
         sam.eval()   # SAM is used as a frozen teacher
+        for parameter in sam.parameters(): parameter.requires_grad_(False)
         print(f"[INFO] SAM model loaded and moved to {args['device']}; evaluation mode enabled.")
 
         # img_dim = 1024 for SAM ViT-B
         img_dim = sam.image_encoder.img_size
-
+        transform = ResizeLongestSide(img_dim)
     else:
         sam = None
         img_dim = int(args['Idim'])
+        transform = None
         print(f"[INFO] SAM disabled; img_dim = {img_dim}")
     
     # ============================================================
@@ -80,7 +80,7 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
     # ============================================================
     train_dataloader, val_dataloader = get_train_val_dataloaders(args, img_dim)
     # Polyp images are RGB (3 channels)
-    img_ch = 3
+    img_ch = train_dataloader.dataset[0][args['image_key']].shape[0]
     print(f"[INFO] Image channels: {img_ch}")
     
     # ============================================================
@@ -94,6 +94,9 @@ def main(args: dict | None = None, sam_args: dict | None = None, saver: Saver | 
     else:
         model = get_standard_model(args, img_ch)
         print(f"[INFO] Phase 2 model: {type(model).__name__} (aggregator)")
+
+    model = model.to(args['device'])
+    print(f"[INFO] Model moved to {args['device']}")    
         
     # ============================================================
     # BatchNorm configuration
@@ -294,9 +297,9 @@ if __name__ == '__main__':
     Task   : Automated Polyp Segmentation
     Input  : Colonoscopy RGB Images
     Output : Binary Polyp Segmentation Masks
-    ============================================================
- """)
+    ============================================================""", formatter_class=argparse.RawDescriptionHelpFormatter)
     print(parser.description)
+
     # ============================================================
     # 1) CORE / TASK
     # ============================================================
@@ -313,14 +316,14 @@ if __name__ == '__main__':
     parser.add_argument('--out_channels', type=int, default=1, help='Output channels')
     parser.add_argument('-order', '--order', default=68, type=int, help='HarDNet variant: 39 | 68 | 85', required=False)
     parser.add_argument('-depth_wise', '--depth_wise', type = str2bool, default=False, help='Use depthwise HarDNet', required=False)
-    parser.add_argument('-Idim', '--Idim', type=int, default=1024, help='Input image size (resize resolution)', required=False)
+    parser.add_argument('-Idim', '--Idim', type=int, default=512, help='Input image size (resize resolution)', required=False)
     parser.add_argument('--num_slices', type=int, default=1, help='Number of slices')
     # ============================================================
     # 3) TRAINING HYPERPARAMETERS
     # ============================================================
-    parser.add_argument('-lr', '--learning_rate', default=1e-4, help='Learning rate', required=False)
-    parser.add_argument('-bs', '--Batch_size', default=2, help='Batch size', required=False)
-    parser.add_argument('-epoches', '--epoches', type=int, default=150, help='Number of training epochs', required=False)
+    parser.add_argument('-lr', '--learning_rate', default=1e-4, help='Learning rate')
+    parser.add_argument('-bs', '--Batch_size', default=2, help='Batch size')
+    parser.add_argument('-epoches', '--epoches', type=int, default=150, help='Number of training epochs')
     parser.add_argument('-WD', '--WD', default=1e-4, help='Weight decay', required=False)
     parser.add_argument('--optim', type=str, default='AdamW', choices=['Adam', 'SGD', 'AdamW'], help='Optimizer')
     parser.add_argument('--momentum', type=float, default=0, help='Momentum (only used with SGD)')
@@ -346,8 +349,8 @@ if __name__ == '__main__':
     # ============================================================
     # 5) DATALOADER
     # ============================================================
-    parser.add_argument('-nW', '--nW', default=0, help='Number of workers for train loader', required=False)
-    parser.add_argument('-nW_eval', '--nW_eval', default=0, help='Number of workers for val loader', required=False)    
+    parser.add_argument('-nW', '--nW', default=0, help='Number of workers for train loader')
+    parser.add_argument('-nW_eval', '--nW_eval', default=0, help='Number of workers for val loader')    
     parser.add_argument('--cache_rate', type=float, default=0.0, help='Dataset cache rate (0.0 to 1.0)')
     parser.add_argument('--n_fold', type=int, default=0, help='Fold index')
     parser.add_argument('--train_batch_size', type=int, default=8, help='[legacy] duplicate of Batch_size')
@@ -376,13 +379,13 @@ if __name__ == '__main__':
     # 8) DEVICE / PERFORMANCE
     # ============================================================
     parser.add_argument('--device', default='cuda', help="Device: 'cuda' or 'cpu'", required=False)
-    parser.add_argument('--device_id', default=0, help='GPU index', required=False)
+    parser.add_argument('--device_id', type=int, default=0, help='GPU index', required=False)
     parser.add_argument('--use_cuda_amp', type=str2bool, default=True, help='Use mixed precision training')
     # ============================================================
     # 9) LOGGING — WandB
     # ============================================================
     parser.add_argument('--wandb_mode', default='online', choices=['online', 'offline', 'disabled'], help='wandb mode', required=False)
-    parser.add_argument('--wandb_project', default='polyp_sam_less', help='wandb project name', required=False)
+    parser.add_argument('--wandb_project', default='PolypLite-SAM', help='wandb project name', required=False)
     parser.add_argument('--wandb_entity', default=None, help='WandB entity (username or team)', required=False)
     parser.add_argument('--wandb_tags', type=str, nargs='+', default=[], help='Wandb tags')
     parser.add_argument('--wandb_watch', type=str2bool, default=False, help='Enable WandB watch')
@@ -403,8 +406,6 @@ if __name__ == '__main__':
     args['experiment_name'] = args['exp_name']
     output_root = 'results'
     args['exp_folder'] = os.path.join(output_root, args['experiment_name'])
-    print(f"[INFO] Experiment output directory: {args['exp_folder']}")
-
     
     saver = Saver(
         output_folder=output_root,
@@ -418,9 +419,9 @@ if __name__ == '__main__':
     cmd = "python " + " ".join(sys.argv)
     saver.log_cmd(cmd)
 
-    args['path'] = os.path.join(saver.path, 'net_last.pth')
-    args['path_best'] = os.path.join(saver.path, 'net_best.pth')
-    args['vis_folder'] = os.path.join(saver.path, 'vis')
+    args['path'] = os.path.join(saver.ckpt_path, 'net_last.pth')
+    args['path_best'] = os.path.join(saver.ckpt_path, 'net_best.pth')
+    args['vis_folder'] = saver.vis_path
 
 
     if args['use_sam']:

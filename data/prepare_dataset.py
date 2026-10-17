@@ -10,7 +10,7 @@ The script is location-independent: it determines all paths relative
 to its own file location, so it can be run from anywhere.
 
 Project layout (assumed):
-    polyp_sam_less/                  <- project root
+    polyp_lite_sam/                  <- project root
     ├── data/
     │   ├── prepare_dataset.py     <- this file
     │   ├── generate_split.py
@@ -55,10 +55,10 @@ from PIL import Image
 # Path configuration (relative to this script's location)
 # ---------------------------------------------------------------------------
 
-# Directory containing this script: polyp_sam_less/data/
+# Directory containing this script: polyp_lite_sam/data/
 DATA_DIR = Path(__file__).resolve().parent
 
-# Project root: polyp_sam_less/
+# Project root: polyp_lite_sam/
 PROJECT_ROOT = DATA_DIR.parent
 
 # ---------------------------------------------------------------------------

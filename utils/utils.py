@@ -1,65 +1,24 @@
-"""
-Utility functions for the polyp segmentation project.
-
-This module provides:
-    - Reproducibility helpers (set_seed)
-    - Logit-to-probability conversion (logits_to_probs, alias norm_batch)
-    - Loss functions (tversky_loss)
-    - Metric helpers (get_dice_ji_torch)
-    - Experiment folder creation (create_experiment_folder)
-    - Training step helper (gen_step)
-    - SAM input construction (get_input_dict, postprocess_masks)
-    - Argument parsing (str2bool)
-    - Model preparation (disable_batchnorm_running_stats)
-"""
-
-import argparse
-import os
-import re
-from pathlib import Path
-from typing import List, Optional, Tuple, Union
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
+import re
+import argparse
 from monai.utils import set_determinism
 from torch.nn.modules.batchnorm import _BatchNorm
+from pathlib import Path
+from typing import List, Optional, Tuple, Union
 
-
-# ===========================================================================
-# Reproducibility
-# ===========================================================================
-
-def set_seed(seed: int, strict: bool = True) -> None:
-    """
-    Set random seeds for reproducibility.
-
-    MONAI's set_determinism handles Python, NumPy, PyTorch seeds and sets
-    cudnn.deterministic=True and cudnn.benchmark=False by default.
-
-    Parameters
-    ----------
-    seed : int
-        Random seed to use.
-    strict : bool, default True
-        If True, keeps cudnn.deterministic=True and cudnn.benchmark=False
-        (slower but reproducible).
-        If False, sets cudnn.deterministic=False and cudnn.benchmark=True
-        (faster but not fully reproducible across runs on GPU).
-    """
+def set_seed(seed, strict=True):
     os.environ["PYTHONHASHSEED"] = str(seed)
     set_determinism(seed=seed)
-
     if not strict:
         torch.backends.cudnn.deterministic = False
         torch.backends.cudnn.benchmark = True
-
     print(
         f"[INFO] Seed set to {seed} | "
         f"Strict reproducibility: {strict} | "
-        f"CUDA available: {torch.cuda.is_available()}"
-    )   
-
+        f"CUDA available: {torch.cuda.is_available()}")   
 
 # ===========================================================================
 # Logit -> Probability conversion

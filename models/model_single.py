@@ -27,46 +27,17 @@ class Decoder(nn.Module):
         return out
 
 class SmallDecoder(nn.Module):
-    """
-    Lightweight decoder for HarDNet feature maps.
-
-    Takes the 5-scale features from HarDNet and produces a dense
-    embedding at 1/4 of the input resolution.
-
-    Parameters
-    ----------
-    full_features : list of int
-        Channel counts of the 5 feature maps (from HarDNet).
-    out : int
-        Number of output channels.
-    use_tanh : bool, default True
-        Apply tanh activation to the final output (as in AutoSAM).
-    """
-    def __init__(self, full_features: List[int], out: int, use_tanh: bool = True) -> None:
+    def __init__(self, full_features, out, use_tanh=True):
         super().__init__()
         self.use_tanh = use_tanh
 
-        # up1: combine x16 (deep) and x8 → output at x8 resolution
         self.up1 = UpBlockSkip(full_features[3] + full_features[2], full_features[2], func='relu', drop=0)
-        # up2: combine up1 and x4 → output at x4 resolution
         self.up2 = UpBlockSkip(full_features[2] + full_features[1], full_features[1], func='relu', drop=0)
-        # final: reshape to `out` channels
         self.final = CNNBlock(full_features[1], out, kernel_size=3, drop=0)
 
-    def forward(self, x: Tuple[torch.Tensor, ...]) -> torch.Tensor:
-        """
-        Parameters
-        ----------
-        x : tuple of tensors
-            5-scale features from HarDNet: (x2, x4, x8, x16, x32).
-
-        Returns
-        -------
-        torch.Tensor
-            Dense embedding of shape (B, out, H/4, W/4).
-        """
-        z = self.up1(x[3], x[2])    # x16 + x8 → x8
-        z = self.up2(z, x[1])       # z + x4  → x4
+    def forward(self, x):
+        z = self.up1(x[3], x[2])
+        z = self.up2(z, x[1])
         out = self.final(z)
         if self.use_tanh: out = torch.tanh(out)
         return out

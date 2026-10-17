@@ -9,92 +9,23 @@ import wandb
 import numpy as np 
 import matplotlib.pyplot as plt
 from pathlib import Path
-from time import time
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 
 class Saver:
-    """
-    Saver handles experiment tracking, model checkpointing, and logging.
-
-    Responsibilities
-    ----------------
-    * Create a timestamped experiment folder under ``output_folder``.
-    * Log scalar metrics to TensorBoard, WandB, and a CSV file.
-    * Save model checkpoints (``.pth``) at regular intervals.
-    * Save visualization images (pred / GT) to disk.
-    * Build and maintain a WandB metrics table for cross-run comparison.
-
-    Folder layout
-    -------------
-    ::
-
-        results/
-        └── <YYYY-MM-DD_HH-MM-SS>_<experiment_name>/
-            ├── events.out.tfevents.*      (TensorBoard)
-            ├── metrics.csv                (long-format: metric, epoch, value)
-            ├── ckpt/                      (checkpoints)
-            ├── vis/                       (visualization images)
-            └── hparams.json, cmd.json     (experiment metadata)
-
-    Attributes
-    ----------
-    path : str
-        Root folder of this experiment (timestamped).
-    ckpt_path : str
-        Folder for saved model checkpoints.
-    vis_path : str
-        Folder for saved visualization images.
-    csv_file : str
-        Path to the metrics CSV file.
-    writer : SummaryWriter
-        TensorBoard writer.
-    wandb_enabled : bool
-        Whether WandB is active (i.e. not in ``disabled`` mode).
-    metrics_table : wandb.Table or None
-        WandB table used for cross-run comparison.
-    """
-    def __init__(self, output_folder: Path, experiment_name: str, wandb_mode: str, wandb_project: str, wandb_entity: str, args: dict):
-        """
-        Parameters
-        ----------
-        output_folder : Path or str
-            Root directory where experiment folders will be created.
-        experiment_name : str
-            Short name for the experiment (e.g. ``'polyp_phase1'``).
-        wandb_mode : str
-            One of ``'online'``, ``'offline'``, or ``'disabled'``.
-        wandb_project : str
-            WandB project name.
-        wandb_entity : str or None
-            WandB entity (user or team). ``None`` uses the current account.
-        args : dict
-            Full argument dictionary (logged as WandB config and saved to disk).
-        """
-        # ------------------------------------------------------------
-        # 1) Create timestamped experiment folder
-        # ------------------------------------------------------------
+    def __init__(self, output_folder, experiment_name, wandb_mode, wandb_project, wandb_entity, args):
         timestamp_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         self.path = os.path.join(output_folder, f'{timestamp_str}_{experiment_name}')
         os.makedirs(self.path, exist_ok=True)
         print(f"[INFO] Experiment directory created: {self.path}")
 
-        # ------------------------------------------------------------
-        # 2) TensorBoard writer
-        # ------------------------------------------------------------
         self.writer = SummaryWriter(str(self.path), flush_secs=30)
-        print(f"[INFO] TensorBoard logging initialized: {self.path}")
+        print(f"[INFO] TensorBoard logging initialized")
 
-        # ------------------------------------------------------------
-        # 3) CSV metrics log (with header for easy pandas reading)
-        # ------------------------------------------------------------
         self.csv_file = os.path.join(self.path, 'metrics.csv')
         with open(self.csv_file, 'w', encoding='UTF8', newline='') as f: csv.writer(f).writerow(['metric', 'epoch', 'value'])
         print(f"[INFO] Metrics CSV initialized: {self.csv_file}")       
 
-        # ------------------------------------------------------------
-        # 4) Sub-folders for checkpoints and visualizations
-        # ------------------------------------------------------------
         self.ckpt_path = os.path.join(self.path, 'ckpt')
         self.vis_path  = os.path.join(self.path, 'vis')
         os.makedirs(self.ckpt_path, exist_ok=True)
@@ -102,26 +33,67 @@ class Saver:
         print(f"[INFO] Checkpoint directory initialized: {self.ckpt_path}")
         print(f"[INFO] Visualization directory initialized: {self.vis_path}")
 
-        # ------------------------------------------------------------
-        # 5) WandB metrics table buffers
-        # ------------------------------------------------------------
-        self.metrics_table: wandb.Table | None = None
-        self.columns: list[str] | None = None
-        self.rows: list[list] = []
+        self.metrics_table = None
+        self.columns = None
+        self.rows = []
 
-        # ------------------------------------------------------------
-        # 6) Initialize WandB (safely — never crash the training run)
-        # ------------------------------------------------------------
         self.wandb_enabled = False
         try:
             wandb.init(project=wandb_project, entity=wandb_entity, mode=wandb_mode, tags=args.get('wandb_tags', []), name=experiment_name, config=args, reinit=True)
             self.wandb_enabled = (wandb_mode != 'disabled') and (wandb.run is not None)
             print(f"[INFO] Weights & Biases: {'enabled' if self.wandb_enabled else 'disabled'}")
-
         except Exception as e:
             self.wandb_enabled = False
             print(f"[WARNING] Weights & Biases initialization failed: {e}")       
 
+    def log_cmd(self, cmd):
+        self.writer.add_text('cmd', cmd, 0)
+        print("[INFO] Command saved to TensorBoard.")
+
+        out_path = os.path.join(self.path, 'cmd.json')
+        with open(out_path, 'w', encoding='utf-8') as fp: json.dump({'cmd': cmd}, fp, indent=2, ensure_ascii=False)
+        print(f"[INFO] Command saved: {out_path}")
+
+        return out_path    
+
+    def log_hparams(self, params_dict):
+        hparams_str = json.dumps(params_dict, indent=2, default=str)
+
+        try:
+            self.writer.add_text("hparams", hparams_str, 0)
+            print("[INFO] TensorBoard hyperparameters logged successfully.")
+        except Exception as e:
+            print(
+                f"[ERROR] TensorBoard logging failed: "
+                f"{type(e).__name__}: {e}")
+            raise
+
+        if self.wandb_enabled:
+            try:
+                wandb.config.update(params_dict, allow_val_change=True)
+                print("[INFO] WandB configuration updated successfully.")
+            except Exception as e:
+                print(
+                    f"[WARNING] WandB config update failed: "
+                    f"{type(e).__name__}: {e}")
+                print("[WARNING] Continuing with local hyperparameter logging.")
+        else: print("[INFO] WandB is disabled; skipping configuration update.")        
+
+        out_path = os.path.join(self.path, 'hparams.json')
+        print(f"[INFO] JSON output path: {out_path}")
+
+        try:
+            with open(out_path, 'w', encoding='utf-8') as fp: json.dump(params_dict, fp, indent=2, default=str, ensure_ascii=False)
+            print("[INFO] Hyperparameters saved successfully.")
+        except Exception as e:
+            print(
+                f"[ERROR] Failed to save hparams.json: "
+                f"{type(e).__name__}: {e}")
+            raise
+        
+        return out_path
+     
+        
     def save_model(self, net: nn.Module, name: str, step: int) -> None:
         """
         Save the model's state dictionary to the checkpoint folder.
@@ -420,36 +392,6 @@ class Saver:
                 f"{type(e).__name__}: {e}")
             raise
         
-        return out_path
-
-    def log_cmd(self, cmd: str) -> str:
-        """
-        Log the command-line invocation to TensorBoard and to a JSON file.
-
-        Parameters
-        ----------
-        cmd : str
-            The command-line string (e.g., "python main.py --task polyp").
-
-        Returns
-        -------
-        str
-            Full path to the saved ``cmd.json`` file.
-
-        Notes
-        -----
-        The TensorBoard tag is fixed to ``'cmd'`` so that multiple runs
-        appear under the same tag and can be compared side-by-side.
-        """
-        # 1) TensorBoard — fixed tag for comparability across runs
-        self.writer.add_text('cmd', cmd, 0)
-        print("[INFO] Command saved to TensorBoard.")
-
-        # 2) JSON file
-        out_path = os.path.join(self.path, 'cmd.json')
-        with open(out_path, 'w', encoding='utf-8') as fp: json.dump({'cmd': cmd}, fp, indent=2, ensure_ascii=False)
-        print(f"[INFO] Command saved: {out_path}")
-
         return out_path
      
     def wb_mask(self, img, mask, gt):
