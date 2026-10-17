@@ -93,7 +93,6 @@ class Saver:
         
         return out_path
      
-        
     def save_model(self, net: nn.Module, name: str, step: int) -> None:
         """
         Save the model's state dictionary to the checkpoint folder.
@@ -395,32 +394,56 @@ class Saver:
         return out_path
      
     def wb_mask(self, img, mask, gt):
-        return wandb.Image(img, masks={"ground_truth" : {"mask_data" : gt, 
-                                                        "class_labels" : {0: "background", 1: "mask"}},
-                                        "predictions": { "mask_data": mask+2, 
-                                                        "class_labels": {2: "background", 3: "mask"}}
-        })
-            
+        pred_shifted = mask.astype(np.uint8) + 2
+        return wandb.Image(
+            img,
+            masks={
+                "ground_truth": {
+                    "mask_data": gt.astype(np.uint8),
+                    "class_labels": {0: "background", 1: "polyp"},
+                },
+                "prediction": {
+                    "mask_data": pred_shifted,
+                    "class_labels": {2: "background", 3: "polyp"},
+                },
+            },
+        )
+
     @torch.no_grad()
-    def log_slices(self, slices: torch.Tensor, masks: torch.Tensor, ground_truth: torch.tensor, step: int, name: str, phase: str):
+    def log_samples_2d(self, images, masks, ground_truth, step, name, phase):
+        if not self.wandb_enabled: return
 
-        assert len(slices.shape)==5, 'Missing dimension.'
-        assert slices.shape[1] == masks.shape[1] == ground_truth.shape[1]
-        assert slices.shape[-1] == masks.shape[-1] == ground_truth.shape[-1]
-        num_samples = slices.shape[0]
-        num_slices = slices.shape[-1]
-        s = slices.squeeze(1)
-        msk = masks.squeeze(1)
-        gt_in = ground_truth.squeeze(1)
-        for b in range(num_samples):
-            wandb_mask_logs = []
-            for idx in range(num_slices):
-                img = s[b, :, :, idx]
-                m = msk[b, :, : , idx]
-                gt = gt_in[b, :, :, idx]
+        if masks.dim() == 4:
+            if masks.shape[1] != 1:
+                raise ValueError(
+                    f"log_samples_2d expects masks with 1 channel, "
+                    f"got shape {tuple(masks.shape)}. Extract polyp channel first."
+                )
+            masks = masks.squeeze(1)
+        if ground_truth.dim() == 4:
+            if ground_truth.shape[1] != 1:
+                raise ValueError(
+                    f"log_samples_2d expects ground_truth with 1 channel, "
+                    f"got shape {tuple(ground_truth.shape)}."
+                )
+            ground_truth = ground_truth.squeeze(1)
 
-                wandb_mask_logs.append(self.wb_mask(img.cpu().numpy(), m.cpu().numpy(), gt.cpu().numpy()))
-            wandb.log({f"Segmentation/{phase}/{name}": wandb_mask_logs, 'step': step})
+        imgs_hwc = images.detach().float().permute(0, 2, 3, 1).cpu().numpy()
+        masks_np = masks.detach().cpu().numpy().round().astype(np.uint8)
+        gt_np    = ground_truth.detach().cpu().numpy().round().astype(np.uint8)
+
+        imagenet_mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        imagenet_std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        imgs_hwc = imgs_hwc * imagenet_std + imagenet_mean
+        imgs_hwc = np.clip(imgs_hwc, 0.0, 1.0)
+
+        B = images.shape[0]
+        for b in range(B):
+            wandb_img = self.wb_mask(imgs_hwc[b], masks_np[b], gt_np[b])
+            wandb.log(
+                {f"Segmentation/{phase}/{name}/sample_{b}": wandb_img},
+                step=step,
+            )
     
     @torch.no_grad()
     def save_images(self, images: torch.Tensor,masks: torch.Tensor, name: str, step: int):

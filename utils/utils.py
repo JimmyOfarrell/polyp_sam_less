@@ -20,57 +20,8 @@ def set_seed(seed, strict=True):
         f"Strict reproducibility: {strict} | "
         f"CUDA available: {torch.cuda.is_available()}")   
 
-# ===========================================================================
-# Logit -> Probability conversion
-# ===========================================================================
-
-def logits_to_probs(x: torch.Tensor) -> torch.Tensor:
-    """
-    Convert SAM's raw logits to probabilities in [0, 1] via sigmoid.
-
-    This function replaces the legacy min-max normalization (used in the
-    original MS-SAM-LESS framework) with `torch.sigmoid`, which is the
-    mathematically correct transformation from logits to probabilities.
-
-    Why sigmoid instead of min-max?
-    --------------------------------
-    SAM outputs logits where:
-        - logit > 0  ->  foreground (target object)
-        - logit < 0  ->  background
-        - logit = 0  ->  decision boundary
-
-    sigmoid preserves this boundary at probability 0.5:
-        sigmoid(0) = 0.5
-
-    In contrast, min-max normalization shifts the boundary on a per-image
-    basis:
-        boundary = (0 - x_min) / (x_max - x_min)
-
-    This means the boundary depends on each image's min/max, which can
-    produce false positives on images WITHOUT a target object. For
-    example, in a polyp-free frame where all logits are negative
-    (e.g., [-15, -2]), min-max maps the highest logit (-2) to 1.0,
-    creating a fake polyp.
-
-    For polyp segmentation, where many frames may not contain a polyp,
-    this is critical. sigmoid is the correct choice.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input tensor of raw logits from SAM's mask decoder.
-        Typically of shape (B, 1, 256, 256).
-
-    Returns
-    -------
-    torch.Tensor
-        Probabilities in [0, 1], same shape and dtype as input.
-    """
+def norm_batch(x):
     return torch.sigmoid(x)
-
-
-# Backward-compatible alias (used by existing code).
-norm_batch = logits_to_probs
 
 
 # ===========================================================================
@@ -294,143 +245,16 @@ def gen_step(
     return loss.item()
 
 
-# ===========================================================================
-# SAM input construction
-# ===========================================================================
-
-def get_input_dict(
-    imgs,
-    original_sz,
-    img_sz,
-    point_coords=None,
-    point_labels=None,
-    boxes=None,
-    mask_inputs=None,
-    swap_original_size=True,
-):
-    """
-    Build per-sample input dicts for SAM (polyp 2D pipeline).
-
-    This is a polyp-focused variant of the original MS function. It keeps
-    the same signature (plus one optional keyword) so it remains a
-    drop-in replacement, while fixing several issues for 2D RGB data.
-
-    Parameters
-    ----------
-    imgs : torch.Tensor
-        Batch of images, shape (B, C, H, W).
-        For polyp: (B, 3, 1024, 1024), already ImageNet-normalized.
-    original_sz : torch.Tensor, numpy.ndarray, or list/tuple of pairs
-        Per-sample ORIGINAL sizes, shape (B, 2).
-        For polyp, PIL's `meta['spatial_shape']` provides (W, H).
-        This function will swap it to (H, W) by default
-        (see `swap_original_size`).
-    img_sz : torch.Tensor, numpy.ndarray, or list/tuple of pairs
-        Per-sample CURRENT sizes, shape (B, 2). Usually (1024, 1024).
-    point_coords, point_labels, boxes, mask_inputs : optional, batched
-        Optional prompts. When provided, the first dim MUST equal B.
-        Each one is passed PER-SAMPLE (indexed by i), matching SAM's
-        native API. NOT used by the polyp pipeline (polyp uses dense
-        embeddings only), but kept for API completeness.
-    swap_original_size : bool, default True
-        If True, `original_size` is swapped from (W, H) to (H, W).
-        Default True is correct for polyp because PIL returns (W, H).
-        Set to False if your input already follows (H, W) order.
-
-    Returns
-    -------
-    list of dict
-        One dict per sample, with keys:
-            'image'         : (C, H, W) tensor
-            'original_size' : (h, w) tuple of ints
-            'image_size'    : (h, w) tuple of ints
-            (+ any provided prompt, per-sample)
-    """
-    B = imgs.shape[0]
+def get_input_dict(imgs, original_sz, img_sz, point_coords=None, point_labels=None, boxes=None, mask_inputs=None, swap_original_size=True):
     batched_input = []
-
     for i, img in enumerate(imgs):
-        # --- Sizes: robustly handle tensor / numpy / list / tuple ---
-        original_size = _size_to_tuple(original_sz[i])
-        input_size    = _size_to_tuple(img_sz[i])
-
-        # --- Polyp fix: PIL meta gives (W, H); swap to (H, W) ---
-        if swap_original_size:
-            original_size = (original_size[1], original_size[0])
-
-        single_input = {
-            "image": img,
-            "original_size": original_size,
-            "image_size": input_size,
-        }
-
-        # --- Optional prompts: per-sample, with batch-size validation ---
-        if point_coords is not None:
-            _check_batch_dim(point_coords, B, "point_coords")
-            single_input["point_coords"] = _slice_prompt(point_coords, i, ndim=2)
-
-        if point_labels is not None:
-            _check_batch_dim(point_labels, B, "point_labels")
-            single_input["point_labels"] = _slice_prompt(point_labels, i, ndim=1)
-
-        if boxes is not None:
-            _check_batch_dim(boxes, B, "boxes")
-            single_input["boxes"] = _slice_prompt(boxes, i, ndim=2)
-
-        if mask_inputs is not None:
-            _check_batch_dim(mask_inputs, B, "mask_inputs")
-            single_input["mask_inputs"] = mask_inputs[i]
-
-        batched_input.append(single_input)
+        input_size    = tuple(int(x) for x in img_sz[i].tolist())
+        original_size = tuple(int(x) for x in original_sz[i].tolist())
+        batched_input.append({'image': img,
+                              'original_size': original_size,
+                              'image_size': input_size})
 
     return batched_input
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _size_to_tuple(x):
-    """
-    Convert a size (tensor / numpy array / list / tuple) into a plain
-    tuple of ints, regardless of its original shape.
-
-    Handles shapes: (2,), (1, 2), (2, 1), [h, w], (h, w).
-    """
-    if hasattr(x, "flatten"):                 # torch.Tensor
-        return tuple(int(v) for v in x.flatten().tolist())
-    if hasattr(x, "tolist"):                  # numpy array
-        return tuple(int(v) for v in x.tolist())
-    return tuple(int(v) for v in x)           # python list / tuple
-
-
-def _check_batch_dim(x, B, name):
-    """
-    Assert that x has a first dimension equal to B.
-    Used only for optional prompts, to catch batch mismatches early.
-    """
-    if not hasattr(x, "shape"):
-        raise TypeError(
-            f"Prompt '{name}' must have a `.shape` attribute, "
-            f"got {type(x).__name__}"
-        )
-    if x.shape[0] != B:
-        raise ValueError(
-            f"Prompt '{name}' batch size mismatch: "
-            f"expected {B}, got {x.shape[0]}"
-        )
-
-
-def _slice_prompt(x, i, ndim):
-    """
-    Return the i-th sample of a batched prompt. If the sample already has
-    the right number of dims, prepend a singleton so SAM sees shape (1, N, ...).
-    """
-    s = x[i]
-    if s.dim() == ndim:
-        return s.unsqueeze(0)
-    return s
-
 
 # ===========================================================================
 # SAM output post-processing

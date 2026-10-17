@@ -228,6 +228,9 @@ Output : Binary Polyp Segmentation Masks
     parser.add_argument('--use_cuda_amp', type=str2bool, default=True, help='Use mixed precision training')
     parser.add_argument('--include_background', type=str2bool, default=False, help='Include background class in loss')
     parser.add_argument('--theashold_discretize', type=float, default=0.5, help='Threshold for binarization')
+    parser.add_argument('--criterion', type=str, default='dice_ce', choices=['dice', 'dice_ce'], help='Loss function')
+    parser.add_argument('-Idim', '--Idim', type=int, default=512, help='Input image size (resize resolution)')
+    parser.add_argument('--save_train_images', type=str2bool, default=False, help='Save training images to WandB')
     args = vars(parser.parse_args())
 
     set_seed(args['seed'])
